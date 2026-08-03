@@ -1,0 +1,145 @@
+# Local dev + the L4/L5/L6 test env — the compose file IS the test env.
+# Flyway runs migrations before the engine starts (engine depends on it via
+# service_completed_successfully), Postgres pins max_connections, and services
+# share a named bridge network.
+#
+# Service + volume KEYS are prefixed `symba-` so a consumer can `include:` this
+# file without colliding with its own `postgres` / `redis` / `frontend` (PKG-3).
+# Compose `include:` COPIES definitions into the consuming project and ERRORS on
+# any name conflict — it does not merge or namespace. Internal DNS resolves on the
+# service key, so every depends_on / FLYWAY_URL / DSN / ENGINE_HOST below names the
+# prefixed key in lockstep.
+services:
+  # ===== PostgreSQL (source of truth) =====
+  symba-postgres:
+    image: postgres:18.1                  # PG 18 floor: uuidv7() support
+    container_name: symba-postgres
+    # Headroom for engine hot+general pools plus worker fan-out under load.
+    command: ["postgres", "-c", "max_connections=300"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-symba}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-symba}
+      POSTGRES_DB: ${POSTGRES_DB:-symba}
+    ports:
+      # Host port is configurable so a dev box already running Postgres on 5432
+      # (e.g. another stack) can remap without touching the in-network port.
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
+    volumes:
+      # PG18 images store data in a version-specific subdir and expect the mount
+      # at /var/lib/postgresql (NOT .../data, the pre-18 convention) so that
+      # pg_upgrade --link works without a mount-point boundary. See
+      # docker-library/postgres#37 and PR#1259.
+      - symba-pgdata:/var/lib/postgresql
+    networks:
+      - symba-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-symba} -d ${POSTGRES_DB:-symba}"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  # ===== Flyway migrations =====
+  # Runs all versioned (V__) SQL from database/symba into the `symba` schema
+  # before the engine starts. Version numbers must be unique.
+  symba-flyway:
+    image: flyway/flyway:12.0.1
+    container_name: symba-flyway
+    depends_on:
+      symba-postgres:
+        condition: service_healthy
+    volumes:
+      - ./flyway.toml:/flyway/conf/flyway.toml:ro
+      - ./database/symba:/flyway/sql/symba:ro
+    environment:
+      FLYWAY_URL: jdbc:postgresql://symba-postgres:5432/${POSTGRES_DB:-symba}
+      FLYWAY_USER: ${POSTGRES_USER:-symba}
+      FLYWAY_PASSWORD: ${POSTGRES_PASSWORD:-symba}
+      FLYWAY_LOCATIONS: "filesystem:/flyway/sql/symba"
+      FLYWAY_SCHEMAS: "symba"
+      FLYWAY_DEFAULT_SCHEMA: "symba"
+      FLYWAY_CREATE_SCHEMAS: "true"
+    command: migrate
+    networks:
+      - symba-network
+
+  # ===== Redis (optional) — chaos suite kills it =====
+  symba-redis:
+    image: redis:8.4
+    container_name: symba-redis
+    ports:
+      - "${REDIS_HOST_PORT:-6379}:6379"
+    networks:
+      - symba-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  # ===== Symba engine =====
+  symba-engine:
+    build:
+      context: .
+    container_name: symba-engine
+    environment:
+      SYMBA_POSTGRES__DSN: postgresql://${POSTGRES_USER:-symba}:${POSTGRES_PASSWORD:-symba}@symba-postgres:5432/${POSTGRES_DB:-symba}
+      SYMBA_POSTGRES__SCHEMA_NAME: symba
+      SYMBA_REDIS__URL: redis://symba-redis:6379/0
+      SYMBA_AUTH__MODE: ${SYMBA_AUTH_MODE:-none}   # dev default; set token in prod
+      # mode=none is loopback-only unless the caller is in a trusted CIDR. The browser
+      # reaches the engine THROUGH the frontend's nginx proxy, so the engine sees the
+      # nginx CONTAINER IP (on the pinned symba-network subnet below), not 127.0.0.1.
+      # Trusting that subnet lets the default dev stack work with zero login. It is the
+      # internal Docker network only — never a public range.
+      SYMBA_AUTH__TRUSTED_PROXY_CIDRS: '["172.31.0.0/24"]'
+      # token-mode dev credential (only enforced when SYMBA_AUTH_MODE=token). Maps the
+      # shared secret -> tenant. The SPA login page exchanges this for a stored session.
+      SYMBA_AUTH__TOKENS: '{"${SYMBA_DEV_TOKEN:-dev-secret-token}":"default"}'
+      SYMBA_LOG__LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      # Host ports are configurable so multiple stacks (e.g. a second symba
+      # checkout, or another engine) can run side by side without clashing.
+      - "${ENGINE_GRPC_HOST_PORT:-7233}:7233"
+      - "${ENGINE_HTTP_HOST_PORT:-7300}:7300"
+    depends_on:
+      symba-flyway:
+        condition: service_completed_successfully
+      symba-postgres:
+        condition: service_healthy
+      symba-redis:
+        condition: service_healthy
+    networks:
+      - symba-network
+    restart: unless-stopped
+
+  # ===== Operator console (SPA) =====
+  # Separate nginx container; the engine image is API-only. nginx proxies
+  # /v1 + /metrics to the engine so the browser is same-origin (SSE works, no CORS).
+  symba-frontend:
+    build:
+      context: ./frontend
+    container_name: symba-frontend
+    environment:
+      ENGINE_HOST: symba-engine
+      ENGINE_PORT: "7300"
+    ports:
+      - "${UI_HOST_PORT:-8080}:80"
+    depends_on:
+      - symba-engine
+    networks:
+      - symba-network
+    restart: unless-stopped
+
+networks:
+  symba-network:
+    name: symba-network
+    driver: bridge
+    # Pinned subnet so the engine's auth trusted_proxy_cidrs can name it deterministically
+    # (mode=none accepts the nginx proxy peer without a login in dev). Internal only.
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
+
+volumes:
+  symba-pgdata:
+    driver: local

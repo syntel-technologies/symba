@@ -1,0 +1,13 @@
+-- count_tenant_live.sql — a tenant's live (non-terminal) job count.
+--
+-- Backpressure gate for the per-tenant queue cap: every row in the hot `jobs` table
+-- is a live job (queued | submitted | running | waiting) — terminal jobs live in
+-- jobs_archive and don't count against the cap. Reading the tiny hot table keeps
+-- this cheap; the partial index on (tenant) serves it.
+--
+-- Transaction context: runs INSIDE the submit transaction (same conn) so the count
+-- and the insert see a consistent snapshot and the check cannot race a concurrent
+-- submit past the cap by more than the in-flight batch.
+--
+-- Parameters: $1 text tenant
+SELECT count(*)::bigint AS live FROM jobs WHERE tenant = $1;

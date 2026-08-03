@@ -1,0 +1,53 @@
+syntax = "proto3";
+package symba.v1;
+import "google/protobuf/timestamp.proto";
+
+// admin.proto — rate classes, cron, fleet, DLQ ops.
+
+service AdminService {
+  rpc ListRateClasses(ListRateClassesRequest) returns (ListRateClassesResponse);
+  rpc UpsertRateClass(RateClass) returns (RateClass);
+
+  rpc ListCronSchedules(ListCronRequest) returns (ListCronResponse);
+  rpc UpsertCronSchedule(CronSchedule) returns (CronSchedule);
+  rpc SetCronEnabled(SetCronEnabledRequest) returns (CronSchedule);
+  rpc DeleteCronSchedule(DeleteCronRequest) returns (DeleteCronResponse);
+
+  rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse);
+}
+
+message RateClass {
+  string name = 1;
+  double capacity = 2;
+  double refill_per_s = 3;
+}
+message ListRateClassesRequest {}
+message ListRateClassesResponse { repeated RateClass classes = 1; }
+
+message CronSchedule {
+  string schedule_id = 1;
+  string cron_expr = 2;
+  string task_name = 3;
+  bytes payload_json = 4;
+  string tenant = 5;
+  bool enabled = 6;
+  google.protobuf.Timestamp last_fire = 7;
+  google.protobuf.Timestamp next_fire = 8;
+}
+message ListCronRequest { string tenant = 1; }
+message ListCronResponse { repeated CronSchedule schedules = 1; }
+message SetCronEnabledRequest { string schedule_id = 1; bool enabled = 2; string tenant = 3; }
+message DeleteCronRequest { string schedule_id = 1; string tenant = 2; }
+message DeleteCronResponse { bool deleted = 1; }
+
+message Worker {
+  string worker_id = 1;
+  repeated string tags = 2;
+  map<string, string> labels = 3;
+  uint32 slots = 4;
+  uint32 slots_busy = 5;
+  google.protobuf.Timestamp last_seen = 6;
+  bool stale = 7;
+}
+message ListWorkersRequest {}
+message ListWorkersResponse { repeated Worker workers = 1; }

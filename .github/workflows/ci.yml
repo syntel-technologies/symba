@@ -1,0 +1,141 @@
+# CI pipeline. Every gate here also has a local `make` target so a
+# green local run predicts a green CI run.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.11"
+  PYTHON_VERSION: "3.13"
+
+jobs:
+  lint-type-imports:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv python install ${{ env.PYTHON_VERSION }}
+      - run: uv pip install --system -e ".[dev]"
+      - name: ruff lint
+        run: ruff check src tests tools
+      - name: ruff format check
+        run: ruff format --check src tests tools
+      - name: pyright
+        run: pyright
+      - name: import gate (core purity + logging)
+        run: python tools/check_imports.py
+      - name: OpenAPI drift gate (UI client cannot silently diverge)
+        run: python tools/check_openapi.py
+
+  proto:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0            # buf breaking needs history
+      - uses: bufbuild/buf-action@v1
+        with:
+          input: proto
+          lint: true
+          breaking: true
+          breaking_against: "https://github.com/${{ github.repository }}.git#branch=main,subdir=proto"
+
+  test-l1:
+    # Pure-logic unit tests: no services, fast, must be 100% deterministic.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv python install ${{ env.PYTHON_VERSION }}
+      - run: uv pip install --system -e ".[dev]"
+      - name: L1 unit tests + coverage gate
+        run: pytest -m l1 --cov=symba.core --cov-fail-under=100 -q
+
+  migrations:
+    # Validate the exact Flyway path prod uses: run the Flyway image against a
+    # real Postgres 18 with the versioned SQL from database/symba.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.1
+        env:
+          POSTGRES_USER: symba
+          POSTGRES_PASSWORD: symba
+          POSTGRES_DB: symba
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U symba"
+          --health-interval 2s --health-timeout 3s --health-retries 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: flyway migrate
+        run: |
+          docker run --rm --network host \
+            -v "${{ github.workspace }}/flyway.toml:/flyway/conf/flyway.toml:ro" \
+            -v "${{ github.workspace }}/database/symba:/flyway/sql/symba:ro" \
+            -e FLYWAY_URL=jdbc:postgresql://localhost:5432/symba \
+            -e FLYWAY_USER=symba \
+            -e FLYWAY_PASSWORD=symba \
+            -e FLYWAY_LOCATIONS=filesystem:/flyway/sql/symba \
+            -e FLYWAY_SCHEMAS=symba \
+            -e FLYWAY_DEFAULT_SCHEMA=symba \
+            -e FLYWAY_CREATE_SCHEMAS=true \
+            flyway/flyway:12.0.1 migrate
+      - name: flyway info (assert 7 versioned migrations applied)
+        run: |
+          docker run --rm --network host \
+            -v "${{ github.workspace }}/flyway.toml:/flyway/conf/flyway.toml:ro" \
+            -v "${{ github.workspace }}/database/symba:/flyway/sql/symba:ro" \
+            -e FLYWAY_URL=jdbc:postgresql://localhost:5432/symba \
+            -e FLYWAY_USER=symba \
+            -e FLYWAY_PASSWORD=symba \
+            -e FLYWAY_LOCATIONS=filesystem:/flyway/sql/symba \
+            -e FLYWAY_SCHEMAS=symba \
+            -e FLYWAY_DEFAULT_SCHEMA=symba \
+            flyway/flyway:12.0.1 info
+
+  test-l2:
+    # Integration tests against a real Postgres 18 + Redis (testcontainers).
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.1
+        env:
+          POSTGRES_USER: symba
+          POSTGRES_PASSWORD: symba
+          POSTGRES_DB: symba
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U symba"
+          --health-interval 2s --health-timeout 3s --health-retries 15
+      redis:
+        image: redis:8.4
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s --health-timeout 3s --health-retries 15
+    env:
+      SYMBA_POSTGRES__DSN: postgresql://symba:symba@localhost:5432/symba
+      SYMBA_REDIS__URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv python install ${{ env.PYTHON_VERSION }}
+      - run: uv pip install --system -e ".[dev]"
+      - name: L2 integration tests
+        run: pytest -m l2 -q
+      - name: EXPLAIN gate (claim must use ix_jobs_claimable, no Seq Scan)
+        run: python tools/explain_gate.py

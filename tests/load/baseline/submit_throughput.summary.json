@@ -1,0 +1,19 @@
+{
+  "_comment": "PLACEHOLDER baseline for tests/load/submit_throughput.js. Populated by the first nightly CI run via k6 handleSummary(). The regression gate treats `placeholder: true` as record-don't-compare, then diffs metrics.http_reqs.values.rate on subsequent runs (fail if < 0.8x). Do not hand-edit the metric numbers below; they are zeros only so the file parses.",
+  "placeholder": true,
+  "root_group": { "name": "", "path": "", "groups": [], "checks": [] },
+  "metrics": {
+    "http_reqs": { "type": "counter", "contains": "default", "values": { "count": 0, "rate": 0 } },
+    "http_req_failed": { "type": "rate", "contains": "default", "values": { "rate": 0, "passes": 0, "fails": 0 } },
+    "http_req_duration": {
+      "type": "trend",
+      "contains": "time",
+      "values": { "avg": 0, "min": 0, "med": 0, "max": 0, "p(90)": 0, "p(95)": 0, "p(99)": 0 }
+    },
+    "symba_submit_latency_ms": {
+      "type": "trend",
+      "contains": "time",
+      "values": { "avg": 0, "min": 0, "med": 0, "max": 0, "p(90)": 0, "p(95)": 0, "p(99)": 0 }
+    }
+  }
+}

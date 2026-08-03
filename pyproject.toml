@@ -1,0 +1,109 @@
+[project]
+name = "symba"
+version = "0.1.0"
+description = "Symba — a standalone, Postgres-backed job execution engine."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.13"
+authors = [{ name = "Symba" }]
+
+# Exact pins: the engine is a deployable, so every version is exact.
+dependencies = [
+    "grpcio==1.82.1",
+    "grpcio-health-checking==1.82.1",
+    "grpcio-reflection==1.82.1",
+    "protobuf>=7.35.1,<8.0",
+    "asyncpg==0.31.0",
+    "redis==8.0.1",
+    "fastapi==0.139.0",
+    "uvicorn==0.51.0",
+    "pydantic==2.13.4",
+    "pydantic-settings==2.14.2",
+    "structlog==26.1.0",
+    "tenacity==9.1.4",
+    "croniter==6.2.4",
+    "prometheus-client==0.25.0",
+    "opentelemetry-sdk==1.43.0",
+    "opentelemetry-exporter-otlp==1.43.0",
+    "pyjwt==2.13.0",
+    "orjson==3.11.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "grpcio-tools==1.82.1",
+    "ruff==0.15.21",
+    "pyright==1.1.411",
+    "pytest>=9.0,<10.0",
+    "pytest-asyncio>=1.4,<2.0",
+    "pytest-cov>=6.0,<8.0",
+    "testcontainers>=4.14,<5.0",
+    "hypothesis>=6.156,<7.0",
+    "httpx>=0.28,<1.0",
+]
+
+[project.scripts]
+symba = "symba.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/symba"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+# asyncpg pools are event-loop-bound; a session-scoped pool must share ONE loop
+# with the function-scoped tests that use it. Pin both to session scope.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+markers = [
+    "l1: pure-logic unit tests (no infra)",
+    "l2: SQL integration tests (testcontainers postgres)",
+    "l3: property tests (hypothesis)",
+    "l4: end-to-end over grpc/http (compose)",
+    "l5: chaos tests",
+    "l6: load tests",
+]
+
+[tool.ruff]
+line-length = 120
+src = ["src", "tests"]
+target-version = "py313"
+# Generated protobuf/grpc stubs are not hand-maintained; never lint them.
+extend-exclude = ["src/symba/v1/*_pb2.py", "src/symba/v1/*_pb2_grpc.py", "src/symba/v1/*_pb2.pyi"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "TID"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection idiom puts Depends()/Query()/etc. in argument
+# defaults by design; these calls are effectively immutable markers, not mutable
+# default-arg traps, so exempt them from B008.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Header",
+]
+
+# The core/ purity rule (stdlib + pydantic only) and the
+# "import logging forbidden outside observability/logging.py" rule
+# are enforced by a dedicated CI check (tools/check_imports.py) rather than a
+# global ruff banned-api, because ruff bans apply repo-wide and services must
+# legitimately import asyncpg/redis/grpc/fastapi.
+
+[tool.pyright]
+include = ["src"]
+exclude = [
+    "src/symba/v1",          # generated protobuf/grpc stubs
+    "**/.venv",              # virtualenv accidentally living under src/
+    "**/__pycache__",
+]
+strict = ["src"]
+pythonVersion = "3.13"
+# asyncpg ships no type stubs and is used raw on the hot path by design;
+# the untyped-boundary reports are silenced per-file via `# pyright:` directives in
+# src/symba/db/pool.py and migrate.py, keeping strict mode everywhere else.

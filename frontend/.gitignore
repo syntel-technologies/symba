@@ -1,0 +1,8 @@
+# Dependencies + build output (also covered by root .gitignore).
+node_modules/
+dist/
+
+# Generated TypeScript client. Source of truth is frontend/openapi.json, which is
+# produced by `python tools/dump_openapi.py` and guarded by the CI drift gate. Run
+# `npm run gen:api` to (re)create this locally; the Docker build does it on every build.
+src/api/schema.ts

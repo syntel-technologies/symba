@@ -1,0 +1,111 @@
+# Symba engine — shipped example Prometheus alert rules.
+#
+# These are STARTERS: copy into your Prometheus rule_files and tune the thresholds
+# to your fleet. Every alert maps to a metric emitted by the engine (metrics.py) and
+# to the operations runbook (docs/operations_runbook.md) via the `runbook` annotation.
+#
+# Metric emission map (where each series comes from):
+#   symba_queue_oldest_age_seconds   sweeper gauge refresh (loops.py Sweeper._refresh_gauges)
+#   symba_jobs_total{state="dead"}   JobService.fail (die path)
+#   symba_ready_to_claim_ms          matcher assign (matcher._observe_ready_to_claim)
+#   symba_rate_bucket_tokens         sweeper gauge refresh <- RateLimiter.snapshot_tokens
+#   symba_gate_age_seconds           sweeper gauge refresh
+#   symba_pool_acquire_wait_seconds  Pools.acquire_hot timed wrapper
+#   symba_pg_oldest_xact_age_seconds sweeper gauge refresh (pg_stat_activity)
+#   symba_loop_errors_total          PeriodicLoop containment (loops.py)
+
+groups:
+  - name: symba.latency
+    rules:
+      - alert: SymbaQueueOldestAgeHigh
+        # Head-of-line queued job older than 10m: the dispatcher is not keeping up
+        # (no capacity, a stuck rate class, or a routing dead-end).
+        expr: max(symba_queue_oldest_age_seconds) > 600
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Oldest queued job > 10m ({{ $value | humanizeDuration }})"
+          runbook: "operations_runbook.md#queue-backlog"
+
+      - alert: SymbaReadyToClaimP95High
+        # p95 dispatcher latency (ready -> claimed) over 500ms: the N2 health floor.
+        expr: histogram_quantile(0.95, rate(symba_ready_to_claim_ms_bucket[5m])) > 500
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ready_to_claim p95 > 500ms ({{ $value }}ms)"
+          runbook: "operations_runbook.md#dispatch-latency"
+
+      - alert: SymbaPoolAcquireWaitP95High
+        # Resize pools BEFORE this becomes user-visible latency.
+        expr: histogram_quantile(0.95, rate(symba_pool_acquire_wait_seconds_bucket[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "pool acquire wait p95 > 100ms ({{ $value }}s) — resize pools"
+          runbook: "operations_runbook.md#pool-saturation"
+
+  - name: symba.reliability
+    rules:
+      - alert: SymbaDeadRateHigh
+        # DEAD (fatal) transitions exceeding 1% of terminal outcomes over 15m.
+        expr: |
+          sum(rate(symba_jobs_total{state="dead"}[15m]))
+            /
+          clamp_min(sum(rate(symba_jobs_total{state=~"succeeded|dead"}[15m])), 1e-9)
+            > 0.01
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "DEAD rate > 1% over 15m ({{ $value | humanizePercentage }})"
+          runbook: "operations_runbook.md#dead-rate"
+
+      - alert: SymbaRateBucketEmpty
+        # A bucket pinned at zero tokens for 5m starves its whole rate class.
+        expr: min by (rate_class) (symba_rate_bucket_tokens) < 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Rate bucket {{ $labels.rate_class }} empty > 5m"
+          runbook: "operations_runbook.md#rate-bucket-starved"
+
+      - alert: SymbaUnfiredGateStuck
+        # A fan-out barrier that never fires (lost child / lost decrement) blocks its
+        # continuation forever; > 1h open is a stall, not slow work.
+        expr: max(symba_gate_age_seconds) > 3600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Unfired gate open > 1h ({{ $value | humanizeDuration }})"
+          runbook: "operations_runbook.md#stuck-gate"
+
+      - alert: SymbaLoopErrorsSpiking
+        # A periodic loop is failing its pass repeatedly (contained, but persistent):
+        # the metric — not a crash — is how §6.2 surfaces a stuck loop.
+        expr: sum by (loop) (rate(symba_loop_errors_total[5m])) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Loop {{ $labels.loop }} failing passes ({{ $value }}/s)"
+          runbook: "operations_runbook.md#loop-errors"
+
+  - name: symba.database
+    rules:
+      - alert: SymbaPgOldestXactAgeHigh
+        # Leading indicator of claim-path MVCC collapse: a stuck transaction anywhere
+        # on the instance pins the vacuum horizon and bloats the hot table. Page on
+        # this — do NOT wait for latency to degrade.
+        expr: symba_pg_oldest_xact_age_seconds > 300
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Oldest PG transaction > 5m ({{ $value | humanizeDuration }}) — vacuum horizon pinned"
+          runbook: "operations_runbook.md#mvcc-horizon"

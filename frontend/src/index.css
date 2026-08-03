@@ -1,0 +1,16 @@
+@import "tailwindcss";
+
+@theme {
+  --color-symba-bg: #0b0f17;
+  --color-symba-panel: #141a24;
+  --color-symba-border: #232c3a;
+  --color-symba-text: #d7dee8;
+  --color-symba-muted: #8a97a8;
+}
+
+body {
+  margin: 0;
+  background: var(--color-symba-bg);
+  color: var(--color-symba-text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}

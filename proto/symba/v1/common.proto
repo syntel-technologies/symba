@@ -1,0 +1,84 @@
+syntax = "proto3";
+package symba.v1;
+import "google/protobuf/timestamp.proto";
+
+// common.proto — shared message types.
+// buf enforces backward compatibility: no field renumbering, additions only.
+
+enum JobState {
+  JOB_STATE_UNSPECIFIED = 0;
+  SUBMITTED = 1;   // deps/run_at not yet satisfied
+  QUEUED    = 2;   // claimable
+  RUNNING   = 3;
+  WAITING   = 4;   // suspended on wait_for_event
+  SUCCEEDED = 5;
+  DEAD      = 6;   // attempts exhausted / fatal
+  CANCELLED = 7;
+}
+
+message RetryPolicy {
+  uint32 max_attempts    = 1;   // default 5
+  double backoff_base_s  = 2;   // default 1.0
+  double backoff_factor  = 3;   // default 2.0
+  double backoff_max_s   = 4;   // default 300
+  bool   jitter          = 5;   // default true (full jitter)
+}
+
+message Dependency {
+  string job_id = 1;
+  string alias  = 2;            // key in ctx.output; defaults to producer task_name
+}
+
+message JobSpec {
+  string task_name        = 1;
+  bytes  payload_json     = 2;  // UTF-8 JSON, engine schema-blind, cap 256KB
+  string pipeline         = 3;  // optional grouping
+  string stage            = 4;
+  string ctx_id           = 5;  // correlation
+  string group_key        = 6;
+  string dedup_key        = 7;
+  repeated string runs_on = 8;  // tag routing
+  string rate_class       = 9;
+  int32  priority         = 10;
+  uint32 timeout_s        = 11;
+  uint32 lease_ttl_s      = 12;
+  RetryPolicy retry       = 13;
+  google.protobuf.Timestamp run_at = 14;
+  repeated string chain   = 15; // tail; engine stores linked list
+  repeated Dependency depends_on = 16;
+  JobSpec on_failure      = 17; // failure hook
+  uint32 max_concurrent_per_group = 18; // 0 = uncapped
+}
+
+message UpstreamResult {
+  string key = 1;               // task_name or alias
+  string job_id = 2;
+  bytes result_json = 3;
+}
+
+message Job {
+  string id = 1;
+  string tenant = 2;
+  JobSpec spec = 3;
+  JobState state = 4;
+  uint32 attempt = 5;
+  bytes result_json = 6;
+  string claimed_by = 7;
+  string last_error = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp started_at = 10;
+  google.protobuf.Timestamp finished_at = 11;
+  repeated UpstreamResult upstream = 12;  // ctx.output source
+  // Full per-attempt error trail (JSON array of {attempt,error_type,message,at}).
+  // last_error is only the newest entry; JobFailed.error_history needs them all.
+  // Carried as a separate field so a DEAD job's result_json stays semantically a
+  // RESULT (empty here) rather than being overloaded with error data.
+  bytes error_history_json = 13;
+}
+
+message JobEvent {
+  string job_id = 1;
+  string event = 2;
+  google.protobuf.Timestamp at = 3;
+  bytes detail_json = 4;
+}

@@ -1,0 +1,109 @@
+# Symba engine configuration.
+# Every key is overridable via SYMBA_<SECTION>__<KEY> env vars or the .env file.
+# The typed model lives in src/symba/config.py and validates this fail-fast at boot.
+
+[app]
+name = "symba"
+description = "Symba job execution engine"
+environment = "development"   # development | testing | production
+version_major = "0"
+version_minor = "1"
+version_patch = "0"
+
+# ===== Transports =====
+[server]
+grpc_port = 7233
+http_port = 7300
+roles = ["all"]               # any of: api, sweeper, all
+grpc_max_message_mb = 4
+grpc_keepalive_time_ms = 20000
+grpc_keepalive_timeout_ms = 5000
+grpc_max_connection_age_s = 1800
+grpc_max_connection_age_grace_s = 60
+shutdown_drain_s = 30
+
+# ===== Database (schema managed by Flyway; see flyway.toml) =====
+[postgres]
+dsn = "postgresql://symba:symba@localhost:5432/symba"   # Set via SYMBA_POSTGRES__DSN
+schema_name = "symba"
+hot_pool_size = 20
+hot_command_timeout_s = 5
+general_pool_size = 20
+general_command_timeout_s = 30
+
+# ===== Redis (optional; empty url -> degraded mode) =====
+[redis]
+url = ""                      # e.g. redis://localhost:6379/0 (Set via SYMBA_REDIS__URL)
+socket_timeout_s = 2.0
+
+# ===== Job defaults =====
+[defaults]
+lease_ttl_s = 60
+timeout_s = 600
+max_attempts = 5
+backoff_base_s = 1.0
+backoff_factor = 2.0
+backoff_max_s = 300.0
+jitter = true
+
+# ===== Limits =====
+[limits]
+max_result_kb = 64
+max_payload_kb = 256
+max_chain_len = 50
+max_fanout_children = 100000
+tenant_queued_cap = 0         # 0 = unlimited; >0 -> submit past N live jobs for a
+                              # tenant returns 429 + Retry-After (RESOURCE_EXHAUSTED
+                              # over gRPC), retryable by contract
+query_max_page = 1000
+
+# ===== Sweeper (lease/wait reclaim) =====
+[sweeper]
+interval_s = 5
+worker_stale_after_heartbeats = 3
+worker_heartbeat_interval_s = 15   # staleness = stale_after * this; last_seen is
+                                   # refreshed on every Claim-stream slot frame
+
+# ===== Retention =====
+[retention]
+job_events_days = 90
+succeeded_jobs_days = 30      # DEAD jobs are NEVER auto-pruned (DLQ contract)
+checkpoints_hours = 72
+consumed_signals_days = 7
+
+# ===== Dispatcher (adaptive polling) =====
+[dispatcher]
+min_tick_ms = 10
+max_tick_ms = 250
+max_per_group_per_batch = 0   # 0 -> GREATEST(2, limit/8)
+
+# ===== Matcher =====
+[matcher]
+strict_group_caps = false
+max_upstream_inline_kb = 256
+
+# ===== Auth / tenancy =====
+# mode=none is the DEV default and is safe: transport/auth.py fail-closes on any
+# non-loopback peer, so local dev + tests work but a routable deploy that forgets to
+# set token/mtls refuses remote callers instead of silently exposing the control
+# plane. Production MUST set mode="token" (with tokens/JWKS) or "mtls".
+[auth]
+mode = "none"                 # token | mtls | none
+token_jwks_url = ""
+# tokens = { "shared-secret" = "tenant-a" }   # shared-secret -> tenant
+
+# ===== Logging =====
+[log]
+level = "INFO"                # DEBUG | INFO | WARNING | ERROR | CRITICAL
+format = "json"               # json | console
+file_path = ""                # e.g. /var/log/app/symba.log for Fluentbit
+enable_stdout = true
+
+# ===== Observability =====
+[observability]
+metrics_enabled = true
+otlp_endpoint = ""            # empty -> tracing off
+
+# ===== Cron scheduler =====
+[cron]
+tick_s = 1.0

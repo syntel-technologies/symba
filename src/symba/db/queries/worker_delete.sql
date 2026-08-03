@@ -1,0 +1,11 @@
+-- worker_delete.sql — drop a worker from the fleet registry on clean disconnect.
+--
+-- The Claim stream closing means this engine no longer serves the worker, so it
+-- leaves the fleet view immediately (an operator sees the disconnect at once rather
+-- than waiting for the staleness sweep). A crash instead of a clean close leaves the
+-- row behind; the sweeper's staleness marking (mark_workers_stale.sql) covers that.
+--
+-- Transaction context: general pool, single statement, no lock. Off the hot pool.
+--
+-- Parameters: $1 text worker_id
+DELETE FROM workers WHERE worker_id = $1;

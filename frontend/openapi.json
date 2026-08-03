@@ -1,0 +1,1778 @@
+{
+  "components": {
+    "schemas": {
+      "BoardDTO": {
+        "properties": {
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Counts",
+            "type": "object"
+          }
+        },
+        "required": [
+          "counts"
+        ],
+        "title": "BoardDTO",
+        "type": "object"
+      },
+      "CancelResponseDTO": {
+        "properties": {
+          "cancelled": {
+            "title": "Cancelled",
+            "type": "boolean"
+          },
+          "cascaded": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Cascaded",
+            "type": "array"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "was_running": {
+            "title": "Was Running",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cancelled",
+          "was_running",
+          "cascaded",
+          "note"
+        ],
+        "title": "CancelResponseDTO",
+        "type": "object"
+      },
+      "CronDTO": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "cron_expr": {
+            "title": "Cron Expr",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "last_fire": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Fire"
+          },
+          "next_fire": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Fire"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "schedule_id": {
+            "title": "Schedule Id",
+            "type": "string"
+          },
+          "task_name": {
+            "title": "Task Name",
+            "type": "string"
+          },
+          "tenant": {
+            "title": "Tenant",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schedule_id",
+          "cron_expr",
+          "task_name",
+          "tenant",
+          "enabled",
+          "last_fire",
+          "next_fire",
+          "created_at",
+          "payload"
+        ],
+        "title": "CronDTO",
+        "type": "object"
+      },
+      "CronListDTO": {
+        "properties": {
+          "schedules": {
+            "items": {
+              "$ref": "#/components/schemas/CronDTO"
+            },
+            "title": "Schedules",
+            "type": "array"
+          }
+        },
+        "required": [
+          "schedules"
+        ],
+        "title": "CronListDTO",
+        "type": "object"
+      },
+      "CronToggleDTO": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "CronToggleDTO",
+        "type": "object"
+      },
+      "CronUpsertDTO": {
+        "properties": {
+          "cron_expr": {
+            "title": "Cron Expr",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payload"
+          },
+          "schedule_id": {
+            "title": "Schedule Id",
+            "type": "string"
+          },
+          "task_name": {
+            "title": "Task Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schedule_id",
+          "cron_expr",
+          "task_name"
+        ],
+        "title": "CronUpsertDTO",
+        "type": "object"
+      },
+      "EventDTO": {
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "event": {
+            "title": "Event",
+            "type": "string"
+          }
+        },
+        "required": [
+          "event",
+          "at",
+          "detail"
+        ],
+        "title": "EventDTO",
+        "type": "object"
+      },
+      "EventsDTO": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/EventDTO"
+            },
+            "title": "Events",
+            "type": "array"
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "title": "EventsDTO",
+        "type": "object"
+      },
+      "FanOutRequestDTO": {
+        "properties": {
+          "children": {
+            "items": {
+              "$ref": "#/components/schemas/JobSpecDTO"
+            },
+            "minItems": 1,
+            "title": "Children",
+            "type": "array"
+          },
+          "ctx_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ctx Id"
+          },
+          "gate_policy": {
+            "default": "all_success",
+            "title": "Gate Policy",
+            "type": "string"
+          },
+          "on_complete": {
+            "$ref": "#/components/schemas/JobSpecDTO"
+          },
+          "tenant": {
+            "default": "default",
+            "title": "Tenant",
+            "type": "string"
+          }
+        },
+        "required": [
+          "children",
+          "on_complete"
+        ],
+        "title": "FanOutRequestDTO",
+        "type": "object"
+      },
+      "FanOutResponseDTO": {
+        "properties": {
+          "child_job_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Child Job Ids",
+            "type": "array"
+          },
+          "gate_id": {
+            "title": "Gate Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "child_job_ids",
+          "gate_id"
+        ],
+        "title": "FanOutResponseDTO",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "JobListDTO": {
+        "properties": {
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/JobListItemDTO"
+            },
+            "title": "Jobs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "jobs"
+        ],
+        "title": "JobListDTO",
+        "type": "object"
+      },
+      "JobListItemDTO": {
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "ctx_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ctx Id"
+          },
+          "error_history": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Error History",
+            "type": "array"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "group_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Key"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "priority": {
+            "title": "Priority",
+            "type": "integer"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "task_name": {
+            "title": "Task Name",
+            "type": "string"
+          },
+          "tenant": {
+            "title": "Tenant",
+            "type": "string"
+          },
+          "wait_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wait Key"
+          },
+          "worker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worker"
+          }
+        },
+        "required": [
+          "id",
+          "tenant",
+          "task_name",
+          "state",
+          "attempt",
+          "priority",
+          "group_key",
+          "ctx_id",
+          "wait_key",
+          "worker",
+          "error_history",
+          "created_at",
+          "started_at",
+          "finished_at"
+        ],
+        "title": "JobListItemDTO",
+        "type": "object"
+      },
+      "JobResponseDTO": {
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "ctx_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ctx Id"
+          },
+          "error_history": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Error History",
+            "type": "array"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "group_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Key"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "priority": {
+            "title": "Priority",
+            "type": "integer"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "task_name": {
+            "title": "Task Name",
+            "type": "string"
+          },
+          "tenant": {
+            "title": "Tenant",
+            "type": "string"
+          },
+          "worker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worker"
+          }
+        },
+        "required": [
+          "id",
+          "tenant",
+          "task_name",
+          "state",
+          "attempt",
+          "priority",
+          "group_key",
+          "ctx_id",
+          "worker",
+          "payload",
+          "result",
+          "error_history",
+          "created_at",
+          "started_at",
+          "finished_at"
+        ],
+        "title": "JobResponseDTO",
+        "type": "object"
+      },
+      "JobSpecDTO": {
+        "properties": {
+          "chain_tail": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Chain Tail",
+            "type": "array"
+          },
+          "dedup_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dedup Key"
+          },
+          "group_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Key"
+          },
+          "lease_ttl_s": {
+            "default": 60,
+            "title": "Lease Ttl S",
+            "type": "integer"
+          },
+          "max_attempts": {
+            "default": 5,
+            "title": "Max Attempts",
+            "type": "integer"
+          },
+          "max_concurrent_per_group": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Concurrent Per Group"
+          },
+          "on_success": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On Success"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "priority": {
+            "default": 0,
+            "title": "Priority",
+            "type": "integer"
+          },
+          "rate_class": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate Class"
+          },
+          "runs_on": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Runs On",
+            "type": "array"
+          },
+          "task_name": {
+            "title": "Task Name",
+            "type": "string"
+          },
+          "timeout_s": {
+            "default": 600,
+            "title": "Timeout S",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "task_name"
+        ],
+        "title": "JobSpecDTO",
+        "type": "object"
+      },
+      "QueueStatDTO": {
+        "properties": {
+          "depth": {
+            "title": "Depth",
+            "type": "integer"
+          },
+          "oldest_age_s": {
+            "title": "Oldest Age S",
+            "type": "integer"
+          },
+          "rate_class": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate Class"
+          },
+          "task_name": {
+            "title": "Task Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_name",
+          "rate_class",
+          "depth",
+          "oldest_age_s"
+        ],
+        "title": "QueueStatDTO",
+        "type": "object"
+      },
+      "QueuesDTO": {
+        "properties": {
+          "queues": {
+            "items": {
+              "$ref": "#/components/schemas/QueueStatDTO"
+            },
+            "title": "Queues",
+            "type": "array"
+          }
+        },
+        "required": [
+          "queues"
+        ],
+        "title": "QueuesDTO",
+        "type": "object"
+      },
+      "ResubmitResponseDTO": {
+        "properties": {
+          "new_job_id": {
+            "title": "New Job Id",
+            "type": "string"
+          },
+          "resubmitted_from": {
+            "title": "Resubmitted From",
+            "type": "string"
+          }
+        },
+        "required": [
+          "new_job_id",
+          "resubmitted_from"
+        ],
+        "title": "ResubmitResponseDTO",
+        "type": "object"
+      },
+      "SignalRequestDTO": {
+        "properties": {
+          "payload": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payload"
+          },
+          "signaled_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signaled By"
+          },
+          "tenant": {
+            "default": "default",
+            "title": "Tenant",
+            "type": "string"
+          },
+          "wait_key": {
+            "title": "Wait Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wait_key"
+        ],
+        "title": "SignalRequestDTO",
+        "type": "object"
+      },
+      "SignalResponseDTO": {
+        "properties": {
+          "delivered": {
+            "title": "Delivered",
+            "type": "boolean"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          }
+        },
+        "required": [
+          "delivered",
+          "job_id"
+        ],
+        "title": "SignalResponseDTO",
+        "type": "object"
+      },
+      "SubmitRequestDTO": {
+        "properties": {
+          "specs": {
+            "items": {
+              "$ref": "#/components/schemas/JobSpecDTO"
+            },
+            "minItems": 1,
+            "title": "Specs",
+            "type": "array"
+          },
+          "tenant": {
+            "default": "default",
+            "title": "Tenant",
+            "type": "string"
+          }
+        },
+        "required": [
+          "specs"
+        ],
+        "title": "SubmitRequestDTO",
+        "type": "object"
+      },
+      "SubmitResponseDTO": {
+        "properties": {
+          "deduplicated": {
+            "items": {
+              "type": "boolean"
+            },
+            "title": "Deduplicated",
+            "type": "array"
+          },
+          "job_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Job Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "job_ids",
+          "deduplicated"
+        ],
+        "title": "SubmitResponseDTO",
+        "type": "object"
+      },
+      "TreeDTO": {
+        "properties": {
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/TreeEdgeDTO"
+            },
+            "title": "Edges",
+            "type": "array"
+          }
+        },
+        "required": [
+          "edges"
+        ],
+        "title": "TreeDTO",
+        "type": "object"
+      },
+      "TreeEdgeDTO": {
+        "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alias"
+          },
+          "downstream": {
+            "title": "Downstream",
+            "type": "string"
+          },
+          "upstream": {
+            "title": "Upstream",
+            "type": "string"
+          }
+        },
+        "required": [
+          "upstream",
+          "downstream",
+          "alias"
+        ],
+        "title": "TreeEdgeDTO",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "WorkerDTO": {
+        "properties": {
+          "labels": {
+            "additionalProperties": true,
+            "title": "Labels",
+            "type": "object"
+          },
+          "last_seen": {
+            "title": "Last Seen",
+            "type": "string"
+          },
+          "slots": {
+            "title": "Slots",
+            "type": "integer"
+          },
+          "slots_busy": {
+            "title": "Slots Busy",
+            "type": "integer"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
+          "worker_id": {
+            "title": "Worker Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "worker_id",
+          "tags",
+          "labels",
+          "slots",
+          "slots_busy",
+          "last_seen",
+          "stale"
+        ],
+        "title": "WorkerDTO",
+        "type": "object"
+      },
+      "WorkersDTO": {
+        "properties": {
+          "workers": {
+            "items": {
+              "$ref": "#/components/schemas/WorkerDTO"
+            },
+            "title": "Workers",
+            "type": "array"
+          }
+        },
+        "required": [
+          "workers"
+        ],
+        "title": "WorkersDTO",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "Symba",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/healthz": {
+      "get": {
+        "operationId": "healthz_healthz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Healthz Healthz Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Healthz"
+      }
+    },
+    "/metrics": {
+      "get": {
+        "operationId": "metrics_metrics_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Metrics"
+      }
+    },
+    "/readyz": {
+      "get": {
+        "operationId": "readyz_readyz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Readyz Readyz Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Readyz"
+      }
+    },
+    "/v1/cron": {
+      "get": {
+        "operationId": "list_cron_v1_cron_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronListDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Cron"
+      },
+      "post": {
+        "operationId": "upsert_cron_v1_cron_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CronUpsertDTO"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upsert Cron"
+      }
+    },
+    "/v1/cron/{schedule_id}": {
+      "delete": {
+        "operationId": "delete_cron_v1_cron__schedule_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "schedule_id",
+            "required": true,
+            "schema": {
+              "title": "Schedule Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Delete Cron V1 Cron  Schedule Id  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Cron"
+      },
+      "put": {
+        "operationId": "set_cron_enabled_v1_cron__schedule_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "schedule_id",
+            "required": true,
+            "schema": {
+              "title": "Schedule Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CronToggleDTO"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Set Cron Enabled V1 Cron  Schedule Id  Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Cron Enabled"
+      }
+    },
+    "/v1/events/stream": {
+      "get": {
+        "operationId": "events_stream_v1_events_stream_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Events Stream"
+      }
+    },
+    "/v1/fanout": {
+      "post": {
+        "operationId": "fan_out_v1_fanout_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FanOutRequestDTO"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FanOutResponseDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fan Out"
+      }
+    },
+    "/v1/jobs": {
+      "get": {
+        "operationId": "list_jobs_v1_jobs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "state_filter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State Filter"
+            }
+          },
+          {
+            "in": "query",
+            "name": "task_name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Task Name"
+            }
+          },
+          {
+            "in": "query",
+            "name": "ctx_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ctx Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "worker",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Worker"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobListDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Jobs"
+      },
+      "post": {
+        "operationId": "submit_jobs_v1_jobs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitRequestDTO"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubmitResponseDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Submit Jobs"
+      }
+    },
+    "/v1/jobs/{job_id}": {
+      "get": {
+        "operationId": "get_job_v1_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponseDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Job"
+      }
+    },
+    "/v1/jobs/{job_id}/cancel": {
+      "post": {
+        "operationId": "cancel_job_v1_jobs__job_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cascade",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Cascade",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelResponseDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Job"
+      }
+    },
+    "/v1/jobs/{job_id}/checkpoints": {
+      "get": {
+        "operationId": "job_checkpoint_v1_jobs__job_id__checkpoints_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Job Checkpoint V1 Jobs  Job Id  Checkpoints Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Job Checkpoint"
+      }
+    },
+    "/v1/jobs/{job_id}/events": {
+      "get": {
+        "operationId": "job_events_v1_jobs__job_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventsDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Job Events"
+      }
+    },
+    "/v1/jobs/{job_id}/resubmit": {
+      "post": {
+        "operationId": "resubmit_job_v1_jobs__job_id__resubmit_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResubmitResponseDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resubmit Job"
+      }
+    },
+    "/v1/jobs/{job_id}/tree": {
+      "get": {
+        "operationId": "job_tree_v1_jobs__job_id__tree_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TreeDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Job Tree"
+      }
+    },
+    "/v1/signals": {
+      "post": {
+        "operationId": "signal_v1_signals_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignalRequestDTO"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignalResponseDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Signal"
+      }
+    },
+    "/v1/stats/board": {
+      "get": {
+        "operationId": "stats_board_v1_stats_board_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoardDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Stats Board"
+      }
+    },
+    "/v1/stats/queues": {
+      "get": {
+        "operationId": "stats_queues_v1_stats_queues_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueuesDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Stats Queues"
+      }
+    },
+    "/v1/workers": {
+      "get": {
+        "operationId": "list_workers_v1_workers_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkersDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Workers"
+      }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+# Flyway config for schema migrations. The engine container depends on the
+# `flyway` compose service via service_completed_successfully; the engine
+# itself never self-migrates.
+[environments.default]
+# Single application schema. All engine objects + Flyway's schema-history table
+# live in `symba`; the search_path for every migration is this schema.
+schemas = ["symba"]
+
+# Version numbers must be unique across all locations.
+[flyway]
+locations = [
+    "filesystem:/flyway/sql/symba",
+]
+defaultSchema = "symba"
+createSchemas = true
+mixed = true
+baselineOnMigrate = false

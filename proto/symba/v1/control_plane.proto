@@ -1,0 +1,86 @@
+syntax = "proto3";
+package symba.v1;
+import "google/protobuf/timestamp.proto";
+import "symba/v1/common.proto";
+
+// control_plane.proto — client <-> engine.
+
+service ClientService {
+  rpc Submit(SubmitRequest) returns (SubmitResponse);        // 1..n specs, one transaction
+  rpc FanOut(FanOutRequest) returns (FanOutResponse);        // children + gate
+  rpc Query(QueryRequest) returns (QueryResponse);           // paged
+  rpc GetJob(GetJobRequest) returns (Job);
+  rpc AwaitJob(AwaitJobRequest) returns (Job);               // server-side long-poll
+  rpc Cancel(CancelRequest) returns (CancelResponse);        // job or tree; see state matrix
+  rpc Signal(SignalRequest) returns (SignalResponse);        // deliver a payload to a waiting job
+  rpc Resubmit(ResubmitRequest) returns (SubmitResponse);    // DLQ replay
+  rpc StreamEvents(StreamEventsRequest) returns (stream JobEvent);  // live tail by ctx_id
+  rpc GetGate(GetGateRequest) returns (GateStatus);          // authoritative gate counts
+}
+
+message GetGateRequest { string tenant = 1; string gate_id = 2; }
+// Authoritative gate aggregate from the `gates` row — NOT a client-side child
+// recount. `succeeded` EXCLUDES ctx.skip() children (a skip settles the gate but
+// is not a success); `terminal` = completed children (succeeded + failed + skipped).
+message GateStatus {
+  string gate_id = 1;
+  uint32 expected = 2;
+  uint32 terminal = 3;
+  uint32 succeeded = 4;
+  google.protobuf.Timestamp fired_at = 5;   // set once the continuation has fired
+}
+
+message SubmitRequest { string tenant = 1; repeated JobSpec specs = 2; }
+message SubmitResponse { repeated string job_ids = 1; repeated bool deduplicated = 2; }
+
+message FanOutRequest {
+  string tenant = 1;
+  repeated JobSpec children = 2;
+  JobSpec on_complete = 3;      // gate continuation
+  string gate_policy = 4;       // all_success | all_terminal | quorum(n)
+  string ctx_id = 5;
+}
+message FanOutResponse { repeated string child_job_ids = 1; string gate_id = 2; }
+
+message QueryRequest {
+  string tenant = 1;
+  string ctx_id = 2;            // any subset of filters
+  JobState state = 3;
+  string task_name = 4;
+  string pipeline = 5;
+  string stage = 6;
+  string group_key = 7;
+  google.protobuf.Timestamp created_after = 8;
+  uint32 page_size = 9;         // default 100, max 1000
+  string page_token = 10;       // keyset cursor (created_at, id)
+  // Gate membership filter: return only the children of this gate (parent_gate_id).
+  // Backs Gate.status() aggregation, which counts child terminal/succeeded rows.
+  string parent_gate_id = 11;
+}
+message QueryResponse { repeated Job jobs = 1; string next_page_token = 2; }
+
+message GetJobRequest { string tenant = 1; string job_id = 2; }
+message AwaitJobRequest { string tenant = 1; string job_id = 2; uint32 timeout_s = 3; }
+
+message CancelRequest { string tenant = 1; string job_id = 2; bool cascade = 3; }
+message CancelResponse { JobState previous_state = 1; bool cancelled = 2; string note = 3; }
+
+message SignalRequest {
+  string tenant = 1;
+  string wait_key = 2;
+  bytes payload_json = 3;
+  string signaled_by = 4;       // audited into job_events
+}
+message SignalResponse { uint32 delivered = 1; }
+
+message ResubmitRequest { string tenant = 1; repeated string job_ids = 2; }
+
+message StreamEventsRequest {
+  string tenant = 1;
+  string ctx_id = 2;
+  // snapshot=false (default): live tail from "now" — the historical UI stream.
+  // snapshot=true: replay the persisted ledger for ctx_id from the beginning and
+  // then close the stream. This is the bounded read JobHandle.events() needs; a
+  // pure live tail never sees a job's already-written events and never terminates.
+  bool snapshot = 3;
+}
