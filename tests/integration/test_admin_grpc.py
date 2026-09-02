@@ -83,9 +83,7 @@ async def test_upsert_list_toggle_delete_cron(admin_stub: admin_grpc.AdminServic
     )
     assert toggled.schedule_id == "recon" and toggled.enabled is False
 
-    deleted = await admin_stub.DeleteCronSchedule(
-        admin.DeleteCronRequest(schedule_id="recon", tenant="default")
-    )
+    deleted = await admin_stub.DeleteCronSchedule(admin.DeleteCronRequest(schedule_id="recon", tenant="default"))
     assert deleted.deleted is True
 
     empty = await admin_stub.ListCronSchedules(admin.ListCronRequest(tenant="default"))
@@ -122,9 +120,7 @@ async def test_cron_tenant_isolation(admin_stub: admin_grpc.AdminServiceStub) ->
 
 
 async def test_upsert_and_list_rate_classes(admin_stub: admin_grpc.AdminServiceStub) -> None:
-    await admin_stub.UpsertRateClass(
-        admin.RateClass(name="llm_reconcile", capacity=10.0, refill_per_s=2.0)
-    )
+    await admin_stub.UpsertRateClass(admin.RateClass(name="llm_reconcile", capacity=10.0, refill_per_s=2.0))
     listed = await admin_stub.ListRateClasses(admin.ListRateClassesRequest())
     by_name = {c.name: c for c in listed.classes}
     assert "llm_reconcile" in by_name

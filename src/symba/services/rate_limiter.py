@@ -181,9 +181,7 @@ class RateLimiter:
             except RedisError:
                 pass
         async with self._pools.general.acquire() as conn:
-            await conn.execute(
-                "UPDATE rate_classes SET tokens = 0, refilled_at = now() WHERE name = $1", rate_class
-            )
+            await conn.execute("UPDATE rate_classes SET tokens = 0, refilled_at = now() WHERE name = $1", rate_class)
         logger.warning("[drain] Bucket drained (429 feedback, PG)", rate_class=rate_class)
 
     async def upsert(self, *, name: str, capacity: float, refill_per_s: float) -> None:

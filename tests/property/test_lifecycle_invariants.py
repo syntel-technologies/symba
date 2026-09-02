@@ -199,9 +199,7 @@ async def _assert_invariants(db: asyncpg.Connection) -> None:
     # I4: every gate fired at most once — fired_at is a single nullable
     # timestamp, so structurally <=1; assert the column never carries a list-like
     # over-fire by checking the succeeded/completed counts never exceed expected.
-    over_counted = await db.fetchval(
-        "SELECT count(*) FROM gates WHERE completed_children > expected_children"
-    )
+    over_counted = await db.fetchval("SELECT count(*) FROM gates WHERE completed_children > expected_children")
     assert over_counted == 0, "a gate counted more completions than it expected"
 
     # I5: the ledger is gapless — every archived job has >=1 terminal event.
@@ -277,14 +275,21 @@ async def test_gap2_group_running_reconciles_after_kill(
                 # running), NOT a static cap — that headroom computation is what keeps a
                 # group at or under its ceiling across batches. We reproduce
                 # it here so the drive is faithful to how the engine actually claims.
-                committed = await db.fetchval(
-                    "SELECT running FROM group_running "
-                    "WHERE tenant='default' AND group_key='g1' AND task_name='capped'"
-                ) or 0
+                committed = (
+                    await db.fetchval(
+                        "SELECT running FROM group_running "
+                        "WHERE tenant='default' AND group_key='g1' AND task_name='capped'"
+                    )
+                    or 0
+                )
                 headroom = max(0, cap - committed)
                 got = await repo.claim(
-                    db, worker_tags=[], exhausted_rate_classes=[], limit=10,
-                    claimed_by="w", per_group_cap=max(1, headroom),
+                    db,
+                    worker_tags=[],
+                    exhausted_rate_classes=[],
+                    limit=10,
+                    claimed_by="w",
+                    per_group_cap=max(1, headroom),
                 )
                 running.extend((j.id, j.lease_token) for j in got)
                 # With matcher headroom, a claim never pushes the group over cap.
@@ -295,8 +300,12 @@ async def test_gap2_group_running_reconciles_after_kill(
             elif step == "fail" and running:
                 jid, tok = running.pop()
                 await svc.jobs.fail(
-                    job_id=jid, lease_token=tok, error_type="E", error_message="x",
-                    stack_hash="h", retryable=False,
+                    job_id=jid,
+                    lease_token=tok,
+                    error_type="E",
+                    error_message="x",
+                    stack_hash="h",
+                    retryable=False,
                 )
 
         # Simulate the residue of a mid-transaction kill: the counter lost a ±delta.

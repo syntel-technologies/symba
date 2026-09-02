@@ -19,6 +19,11 @@ from datetime import datetime
 from typing import Any
 
 
+def _empty_payload() -> dict[str, Any]:
+    """Return a precisely typed payload for dataclass default factories."""
+    return {}
+
+
 @dataclass(slots=True)
 class SubmitSpec:
     """One job to insert. Mirrors the submit.sql column order."""
@@ -75,6 +80,14 @@ class ClaimedJob:
     payload: dict[str, Any]
     attempt: int
     raw: dict[str, Any]
+
+
+@dataclass(slots=True)
+class ExhaustedLease:
+    """An abandoned execution whose stored retry budget is exhausted."""
+
+    job_id: str
+    lease_token: str
 
 
 @dataclass(slots=True)
@@ -176,6 +189,8 @@ class JobListItem:
     id: str
     tenant: str
     task_name: str
+    pipeline: str | None
+    stage: str | None
     state: str
     attempt: int
     priority: int
@@ -224,7 +239,7 @@ class CronRow:
     last_fire: datetime | None
     next_fire: datetime | None
     created_at: datetime
-    payload: dict[str, Any] = field(default_factory=dict)
+    payload: dict[str, Any] = field(default_factory=_empty_payload)
 
 
 @dataclass(slots=True)

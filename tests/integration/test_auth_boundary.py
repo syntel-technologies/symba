@@ -88,6 +88,15 @@ async def test_v1_with_bad_token_is_401(engine: EngineState) -> None:
     assert resp.status_code == 401
 
 
+async def test_v1_query_token_is_not_a_credential(engine: EngineState) -> None:
+    # Credentials in URLs leak into access logs, histories, and referrers. Even the
+    # SSE endpoint uses an Authorization header, so query tokens must fail closed.
+    async with _client(engine) as c:
+        resp = await c.get("/v1/stats/board", params={"access_token": "secret-a"})
+    assert resp.status_code == 401
+    assert resp.json()["error_code"] == "unauthenticated"
+
+
 async def test_v1_with_valid_token_is_200(engine: EngineState) -> None:
     async with _client(engine) as c:
         resp = await c.get("/v1/stats/board", headers=_HDR_A)
@@ -121,7 +130,8 @@ async def test_submit_tenant_is_from_credential_not_body(engine: EngineState) ->
 async def test_list_jobs_is_tenant_isolated(engine: EngineState) -> None:
     async with _client(engine) as c:
         await c.post(
-            "/v1/jobs", headers=_HDR_A,
+            "/v1/jobs",
+            headers=_HDR_A,
             json={"specs": [{"task_name": "t.only_a", "payload": {}}]},
         )
         a_jobs = (await c.get("/v1/jobs?task_name=t.only_a", headers=_HDR_A)).json()["jobs"]
@@ -133,7 +143,8 @@ async def test_list_jobs_is_tenant_isolated(engine: EngineState) -> None:
 async def test_cross_tenant_cancel_is_404(engine: EngineState) -> None:
     async with _client(engine) as c:
         submit = await c.post(
-            "/v1/jobs", headers=_HDR_A,
+            "/v1/jobs",
+            headers=_HDR_A,
             json={"specs": [{"task_name": "t.cancel", "payload": {}}]},
         )
         job_id = submit.json()["job_ids"][0]

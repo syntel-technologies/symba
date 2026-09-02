@@ -1,0 +1,25 @@
+# syntax=docker/dockerfile:1.4@sha256:9ba7531bd80fb0a858632727cf7a112fbfd19b17e94c4e84ced81e24ef1a0dbc
+
+FROM postgres:18.1@sha256:1090bc3a8ccfb0b55f78a494d76f8d603434f7e4553543d6e807bc7bd6bbd17f
+
+COPY --chmod=0555 scripts/postgres/init_roles.sh /docker-entrypoint-initdb.d/010-symba-roles.sh
+COPY --chmod=0555 scripts/release/verify_provenance.sh /usr/local/bin/symba-verify-release
+COPY --chmod=0555 scripts/postgres/assert_contract.sh /usr/local/bin/symba-assert-postgres-contract
+COPY --chmod=0555 scripts/postgres/harden_hba.sh /usr/local/bin/symba-harden-pg-hba
+COPY --chmod=0555 scripts/postgres/entrypoint.sh /usr/local/bin/symba-postgres-entrypoint
+
+ARG KNOR_RELEASE_ID=development
+ARG KNOR_RELEASE_MANIFEST_SHA256=unreleased
+RUN mkdir -p /usr/local/share/symba && \
+    printf '%s\n' "$KNOR_RELEASE_ID" > /usr/local/share/symba/release-id && \
+    printf '%s\n' "$KNOR_RELEASE_MANIFEST_SHA256" > /usr/local/share/symba/release-manifest-sha256 && \
+    chmod 0444 /usr/local/share/symba/release-id /usr/local/share/symba/release-manifest-sha256
+LABEL org.opencontainers.image.version="${KNOR_RELEASE_ID}" \
+    org.opencontainers.image.revision="${KNOR_RELEASE_MANIFEST_SHA256}" \
+    com.amplior.release.id="${KNOR_RELEASE_ID}" \
+    com.amplior.release.manifest-sha256="${KNOR_RELEASE_MANIFEST_SHA256}"
+ENV KNOR_IMAGE_RELEASE_ID="${KNOR_RELEASE_ID}" \
+    KNOR_IMAGE_RELEASE_MANIFEST_SHA256="${KNOR_RELEASE_MANIFEST_SHA256}"
+
+ENTRYPOINT ["/usr/local/bin/symba-postgres-entrypoint"]
+CMD ["postgres"]

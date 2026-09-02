@@ -29,6 +29,7 @@ from symba.db.records import (
     CronDue,
     CronRow,
     EventRow,
+    ExhaustedLease,
     InlineUpstream,
     JobListItem,
     JobRow,
@@ -96,6 +97,7 @@ async def claim(
     limit: int,
     claimed_by: str,
     per_group_cap: int,
+    rate_quotas: dict[str, int] | None = None,
 ) -> list[ClaimedJob]:
     """THE hot query. One transaction; caller opens it."""
     rows = await conn.fetch(
@@ -105,8 +107,21 @@ async def claim(
         limit,
         claimed_by,
         per_group_cap,
+        rate_quotas or {},
     )
     return [_to_claimed(r) for r in rows]
+
+
+async def running_counts_by_worker(
+    conn: asyncpg.Connection,
+    *,
+    worker_ids: list[str],
+) -> dict[str, int]:
+    """Return live attributed-job counts for the requested workers."""
+    if not worker_ids:
+        return {}
+    rows = await conn.fetch(Q.RUNNING_COUNTS_BY_WORKER, worker_ids)
+    return {str(row["worker_id"]): int(row["running_count"]) for row in rows}
 
 
 async def set_claimed_by(
@@ -219,9 +234,7 @@ async def insert_continuation(
     return str(new_id)
 
 
-async def fetch_inline_upstream(
-    conn: asyncpg.Connection, *, job_ids: list[str]
-) -> dict[str, list[InlineUpstream]]:
+async def fetch_inline_upstream(conn: asyncpg.Connection, *, job_ids: list[str]) -> dict[str, list[InlineUpstream]]:
     """Batch-load the Job.upstream inline tier for a claim assignment batch.
 
     Returns asking_job_id -> producers (chain predecessor + depends_on). Empty
@@ -336,14 +349,12 @@ async def gate_child_results(conn: asyncpg.Connection, *, gate_id: str) -> list[
 class GateStatusRow:
     gate_id: str
     expected: int
-    terminal: int          # completed_children (succeeded + failed + skipped)
-    succeeded: int         # excludes skips + failures
+    terminal: int  # completed_children (succeeded + failed + skipped)
+    succeeded: int  # excludes skips + failures
     fired_at: datetime | None
 
 
-async def get_gate(
-    conn: asyncpg.Connection, *, tenant: str, gate_id: str
-) -> GateStatusRow | None:
+async def get_gate(conn: asyncpg.Connection, *, tenant: str, gate_id: str) -> GateStatusRow | None:
     """Read the authoritative gate aggregate for Gate.status() (spec 7.2)."""
     row = await conn.fetchrow(Q.GET_GATE, tenant, gate_id)
     if row is None:
@@ -511,9 +522,25 @@ async def record_event(
     await conn.execute(Q.RECORD_EVENT, job_id, event, detail)
 
 
-async def sweep_leases(conn: asyncpg.Connection, *, limit: int) -> int:
-    """Reclaim expired leases. Returns rows reclaimed."""
-    return await conn.fetchval(Q.SWEEP_LEASES, limit) or 0
+async def sweep_leases(
+    conn: asyncpg.Connection,
+    *,
+    limit: int,
+    stale_worker_grace_s: int = 45,
+) -> int:
+    """Reclaim expired leases and jobs abandoned by a missing worker."""
+    return await conn.fetchval(Q.SWEEP_LEASES, limit, stale_worker_grace_s) or 0
+
+
+async def list_exhausted_leases(
+    conn: asyncpg.Connection,
+    *,
+    limit: int,
+    stale_worker_grace_s: int = 45,
+) -> list[ExhaustedLease]:
+    """Return abandoned running jobs that have consumed every attempt."""
+    rows = await conn.fetch(Q.LIST_EXHAUSTED_LEASES, limit, stale_worker_grace_s)
+    return [ExhaustedLease(job_id=str(row["id"]), lease_token=str(row["lease_token"])) for row in rows]
 
 
 async def sweep_waits(conn: asyncpg.Connection, *, limit: int) -> list[str]:
@@ -729,16 +756,34 @@ async def list_jobs(
     offset: int,
     claimed_by: str | None = None,
     parent_gate_id: str | None = None,
+    pipeline: str | None = None,
+    stage: str | None = None,
+    group_key: str | None = None,
+    created_after: datetime | None = None,
 ) -> list[JobListItem]:
     """Paged, filtered job list across hot + archive (UI views)."""
     rows = await conn.fetch(
-        Q.LIST_JOBS, tenant, state, task_name, ctx_id, limit, offset, claimed_by, parent_gate_id
+        Q.LIST_JOBS,
+        tenant,
+        state,
+        task_name,
+        ctx_id,
+        limit,
+        offset,
+        claimed_by,
+        parent_gate_id,
+        pipeline,
+        stage,
+        group_key,
+        created_after,
     )
     return [
         JobListItem(
             id=str(r["id"]),
             tenant=r["tenant"],
             task_name=r["task_name"],
+            pipeline=r["pipeline"],
+            stage=r["stage"],
             state=r["state"],
             attempt=r["attempt"],
             priority=r["priority"],

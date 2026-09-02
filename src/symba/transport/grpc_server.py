@@ -14,6 +14,8 @@ and reconnect storms are a tested path, not an incident.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import grpc
 from grpc_health.v1 import health, health_pb2, health_pb2_grpc
 from grpc_reflection.v1alpha import reflection
@@ -33,6 +35,43 @@ logger = logger.bind(service="grpc_server", context="engine/transport")
 _DATA_PLANE_SERVICE = "symba.v1.DataPlane"
 _CONTROL_PLANE_SERVICE = "symba.v1.ClientService"
 _ADMIN_SERVICE = "symba.v1.AdminService"
+
+
+def _read_tls_material(path: str, *, label: str) -> bytes:
+    """Read one TLS input without ever including its contents in diagnostics."""
+    try:
+        value = Path(path).read_bytes()
+    except OSError as exc:
+        raise RuntimeError(f"unable to read configured {label}") from exc
+    if not value.strip():
+        raise RuntimeError(f"configured {label} is empty")
+    return value
+
+
+def _add_listening_port(server: grpc.aio.Server, state: EngineState) -> int:
+    """Bind exactly one gRPC listener using the configured transport security."""
+    cfg = state.config.server
+    address = f"0.0.0.0:{cfg.grpc_port}"
+    if not cfg.grpc_tls_enabled:
+        return server.add_insecure_port(address)  # noqa: S104 - container-internal dev only
+
+    private_key = _read_tls_material(cfg.grpc_tls_key_file, label="gRPC TLS private key")
+    certificate_chain = _read_tls_material(
+        cfg.grpc_tls_cert_file,
+        label="gRPC TLS certificate chain",
+    )
+    root_certificates = None
+    if cfg.grpc_tls_require_client_auth:
+        root_certificates = _read_tls_material(
+            cfg.grpc_tls_client_ca_file,
+            label="gRPC TLS client CA",
+        )
+    credentials = grpc.ssl_server_credentials(
+        [(private_key, certificate_chain)],
+        root_certificates=root_certificates,
+        require_client_auth=cfg.grpc_tls_require_client_auth,
+    )
+    return server.add_secure_port(address, credentials)
 
 
 def _server_options(state: EngineState) -> list[tuple[str, int]]:
@@ -110,7 +149,9 @@ async def serve_grpc(state: EngineState) -> None:
         server,
     )
 
-    server.add_insecure_port(f"0.0.0.0:{cfg.grpc_port}")  # noqa: S104 - container-internal
+    bound_port = _add_listening_port(server, state)
+    if bound_port == 0:
+        raise RuntimeError("gRPC server failed to bind its configured port")
     await server.start()
 
     # Advertise SERVING for both the overall server ("") and our data-plane name.
@@ -118,7 +159,12 @@ async def serve_grpc(state: EngineState) -> None:
     await health_servicer.set(_DATA_PLANE_SERVICE, health_pb2.HealthCheckResponse.SERVING)
     await health_servicer.set(_CONTROL_PLANE_SERVICE, health_pb2.HealthCheckResponse.SERVING)
     await health_servicer.set(_ADMIN_SERVICE, health_pb2.HealthCheckResponse.SERVING)
-    logger.info("[serve_grpc] gRPC server started", port=cfg.grpc_port)
+    logger.info(
+        "[serve_grpc] gRPC server started",
+        port=cfg.grpc_port,
+        tls_enabled=cfg.grpc_tls_enabled,
+        client_auth_required=cfg.grpc_tls_require_client_auth,
+    )
 
     try:
         await server.wait_for_termination()

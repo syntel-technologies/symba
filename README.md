@@ -149,6 +149,7 @@ doesn't know what they do.
 
 ```bash
 # 1. Bring up the whole stack: engine + PG18 + Flyway (migrations) + optional Redis + UI.
+#    gRPC stubs are generated inside the engine image at build time — no host `make proto`.
 docker compose up -d --wait
 
 # 2. Submit a job (control plane on :7300; or :8080 via the UI's proxy).
@@ -167,7 +168,8 @@ chains, fan-out/gate, signals, cancel cascades, DLQ resubmit, cron, and observab
 ### Local development
 
 ```bash
-uv sync                        # install deps (pins are exact; engine is a deployable)
+uv sync --extra dev              # dev extra includes grpcio-tools for codegen
+make proto                       # once per clone if you run outside Docker (auto via `make run`)
 uv run pytest -m l1            # pure-logic unit tests (fast, no infra)
 uv run pytest -m l2            # integration tests (spins up PG18 via testcontainers)
 uv run ruff check src tests    # lint;  uv run pyright  for types
@@ -196,14 +198,38 @@ anything but `localhost`, change these:
 Minimal production `.env`:
 
 ```bash
+KNOR_RELEASE_ID=2026-09-02-release-r2
+KNOR_RELEASE_MANIFEST_SHA256=<lowercase-sha256-of-coordinated-release_manifest.json>
 SYMBA_APP__ENVIRONMENT=production
-SYMBA_POSTGRES__DSN=postgresql://symba:${DB_PASSWORD}@db:5432/symba
+SYMBA_POSTGRES__HOST=db
+SYMBA_POSTGRES__PORT=5432
+SYMBA_POSTGRES__USER=symba
+SYMBA_POSTGRES__PASSWORD=${DB_PASSWORD}
+SYMBA_POSTGRES__DATABASE=symba
 SYMBA_REDIS__URL=redis://cache:6379/0        # optional; omit for degraded mode
 SYMBA_AUTH__MODE=token                        # REQUIRED for any routable deploy
 SYMBA_AUTH__TOKEN_JWKS_URL=https://idp/.well-known/jwks.json
 SYMBA_LOG__FORMAT=json
 SYMBA_OBSERVABILITY__OTLP_ENDPOINT=http://otel-collector:4317
 ```
+
+Generate and hash the coordinated top-level source manifest before setting
+these two values. The production Compose overlay requires them for both the
+engine and operator frontend images; their OCI version/revision, custom
+release labels, and baked `KNOR_IMAGE_RELEASE_*` values must match the other
+images in that release. Do not set the baked names at runtime.
+
+The bundled `docker-compose.production.yml` also creates three fixed database
+identities instead of running the engine as the PostgreSQL bootstrap
+superuser. Generate independent 32-character-or-longer values for
+`SYMBA_POSTGRES_ADMIN_PASSWORD`, `SYMBA_POSTGRES_MIGRATION_PASSWORD`, and
+`SYMBA_POSTGRES_RUNTIME_PASSWORD`; only the last reaches the engine. Generate
+an independent URL-safe `SYMBA_REDIS_PASSWORD` of at least 32 characters. The
+bootstrap `postgres` role is local-peer-only after initialization; TCP
+authentication is rejected even with its correct password. The overlay pins
+SCRAM-SHA-256 for host database connections, authenticates Redis,
+and rejects reused database, Redis, or engine-token credentials before the
+long-lived engine starts.
 
 Ship the multi-arch engine image straight from GHCR (`ghcr.io/syntel-technologies/symba:vX.Y.Z`,
 built for `linux/amd64` + `linux/arm64` on every release tag) and the `frontend/` image
@@ -226,4 +252,3 @@ the on-call playbook in [`docs/operations_runbook.md`](docs/operations_runbook.m
 ## License
 
 Apache-2.0. See [`LICENSE`](LICENSE).
-

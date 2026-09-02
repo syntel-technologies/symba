@@ -24,6 +24,8 @@ sizes are hard-capped so a huge archive can never stream unbounded rows.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from croniter import croniter
 
 from symba.core.errors import NotFound, PermissionDenied, ValidationError
@@ -50,6 +52,10 @@ class QueryService:
         ctx_id: str | None = None,
         worker: str | None = None,
         parent_gate_id: str | None = None,
+        pipeline: str | None = None,
+        stage: str | None = None,
+        group_key: str | None = None,
+        created_after: datetime | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[JobListItem]:
@@ -63,6 +69,10 @@ class QueryService:
                 ctx_id=ctx_id,
                 claimed_by=worker,
                 parent_gate_id=parent_gate_id,
+                pipeline=pipeline,
+                stage=stage,
+                group_key=group_key,
+                created_after=created_after,
                 limit=capped,
                 offset=max(0, offset),
             )

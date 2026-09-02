@@ -154,3 +154,14 @@ SYMBA_AUTH__TOKEN_JWKS_URL=https://idp/.well-known/jwks.json
 SYMBA_LOG__FORMAT=json
 SYMBA_OBSERVABILITY__OTLP_ENDPOINT=http://otel-collector:4317
 ```
+
+When using the bundled production Compose overlay, do not reuse the generic
+development `POSTGRES_PASSWORD`. Generate independent secrets for the fixed
+`postgres`, `symba_migrator`, and `symba_runtime` identities through
+`SYMBA_POSTGRES_ADMIN_PASSWORD`, `SYMBA_POSTGRES_MIGRATION_PASSWORD`, and
+`SYMBA_POSTGRES_RUNTIME_PASSWORD`. Also set an independent URL-safe
+`SYMBA_REDIS_PASSWORD`; all four secrets must contain at least 32 characters.
+The bootstrap `postgres` role remains available only through local Unix-socket
+peer authentication; every TCP login for that role is rejected after cluster
+initialization.
+Only the runtime database credential is passed to the engine.

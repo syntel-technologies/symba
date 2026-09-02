@@ -127,6 +127,72 @@ async def test_claim_exhausted_rate_class_skipped(db: asyncpg.Connection) -> Non
     assert len(ok) == 1
 
 
+async def test_claim_enforces_partial_rate_quota_exactly(db: asyncpg.Connection) -> None:
+    for _ in range(5):
+        await h.seed(db, h.spec(rate_class="slow"))
+
+    got = await repo.claim(
+        db,
+        worker_tags=[],
+        exhausted_rate_classes=[],
+        limit=10,
+        claimed_by="w1",
+        per_group_cap=1000,
+        rate_quotas={"slow": 2},
+    )
+
+    assert len(got) == 2
+    assert {job.raw.get("rate_class") for job in got} == {"slow"}
+    assert await db.fetchval("SELECT count(*) FROM jobs WHERE state = 'queued' AND rate_class = 'slow'") == 3
+
+
+async def test_claim_enforces_each_rate_quota_with_unlimited_jobs(
+    db: asyncpg.Connection,
+) -> None:
+    for _ in range(3):
+        await h.seed(db, h.spec(rate_class="slow"))
+        await h.seed(db, h.spec(rate_class="fast"))
+    for _ in range(2):
+        await h.seed(db, h.spec())
+
+    got = await repo.claim(
+        db,
+        worker_tags=[],
+        exhausted_rate_classes=[],
+        limit=10,
+        claimed_by="w1",
+        per_group_cap=1000,
+        rate_quotas={"slow": 1, "fast": 2},
+    )
+
+    by_class: dict[str | None, int] = {}
+    for job in got:
+        rate_class = job.raw.get("rate_class")
+        by_class[rate_class] = by_class.get(rate_class, 0) + 1
+    assert by_class == {None: 2, "fast": 2, "slow": 1}
+
+
+async def test_rate_quota_skips_group_blocked_rows_when_ranking(
+    db: asyncpg.Connection,
+) -> None:
+    running_id = await h.seed(db, h.spec(group_key="blocked", cap=1, rate_class="slow", priority=20))
+    assert (await h.claim_one(db)).id == running_id
+    await h.seed(db, h.spec(group_key="blocked", cap=1, rate_class="slow", priority=10))
+    eligible_id = await h.seed(db, h.spec(rate_class="slow"))
+
+    got = await repo.claim(
+        db,
+        worker_tags=[],
+        exhausted_rate_classes=[],
+        limit=10,
+        claimed_by="w2",
+        per_group_cap=1000,
+        rate_quotas={"slow": 1},
+    )
+
+    assert [job.id for job in got] == [eligible_id]
+
+
 async def test_claim_priority_order(db: asyncpg.Connection) -> None:
     low = await h.seed(db, h.spec(priority=0))
     high = await h.seed(db, h.spec(priority=9))
@@ -237,8 +303,7 @@ async def test_cancel_running_sets_flag_only(db: asyncpg.Connection) -> None:
 
 
 async def test_sweep_leases_reclaims_only_expired(db: asyncpg.Connection) -> None:
-    # regression pin: the reclaim predicate is EXACTLY lease_expires_at < now().
-    # A healthy (unexpired) lease must survive the sweep untouched.
+    # A healthy lease with a recent heartbeat must survive the sweep untouched.
     expired_id = await h.seed(db, h.spec())
     healthy_id = await h.seed(db, h.spec())
     await h.claim_one(db, worker="w1")  # claims one of them
@@ -252,6 +317,76 @@ async def test_sweep_leases_reclaims_only_expired(db: asyncpg.Connection) -> Non
     assert reclaimed == 1
     assert await db.fetchval("SELECT state FROM jobs WHERE id = $1", expired_id) == "queued"
     assert await db.fetchval("SELECT state FROM jobs WHERE id = $1", healthy_id) == "running"
+
+
+async def test_sweep_leases_reclaims_missing_worker_after_grace(db: asyncpg.Connection) -> None:
+    job_id = await h.seed(db, h.spec(lease_ttl_s=1800))
+    await h.claim_one(db, worker="w-gone")
+    await db.execute(
+        "UPDATE jobs SET last_heartbeat_at = now() - interval '1 minute' WHERE id = $1",
+        job_id,
+    )
+
+    reclaimed = await repo.sweep_leases(db, limit=100, stale_worker_grace_s=45)
+
+    assert reclaimed == 1
+    row = await db.fetchrow(
+        "SELECT state, claimed_by, lease_expires_at, error_history FROM jobs WHERE id = $1",
+        job_id,
+    )
+    assert row is not None
+    assert row["state"] == "queued"
+    assert row["claimed_by"] is None
+    assert row["lease_expires_at"] is None
+    assert row["error_history"][-1]["type"] == "lease_expired"
+
+
+async def test_sweep_leases_does_not_requeue_exhausted_attempt(db: asyncpg.Connection) -> None:
+    spec = h.spec(lease_ttl_s=1800)
+    spec.max_attempts = 1
+    job_id = await h.seed(db, spec)
+    await h.claim_one(db, worker="w-gone")
+    await db.execute(
+        "UPDATE jobs SET last_heartbeat_at = now() - interval '1 minute' WHERE id = $1",
+        job_id,
+    )
+
+    candidates = await repo.list_exhausted_leases(db, limit=100, stale_worker_grace_s=45)
+    reclaimed = await repo.sweep_leases(db, limit=100, stale_worker_grace_s=45)
+
+    assert [(row.job_id, row.lease_token) for row in candidates] == [
+        (job_id, await db.fetchval("SELECT lease_token FROM jobs WHERE id=$1", job_id))
+    ]
+    assert reclaimed == 0
+    assert await db.fetchval("SELECT state FROM jobs WHERE id=$1", job_id) == "running"
+
+
+async def test_sweep_leases_archives_cancelled_job_after_worker_loss(
+    db: asyncpg.Connection,
+) -> None:
+    job_id = await h.seed(db, h.spec(lease_ttl_s=1800))
+    await h.claim_one(db, worker="w-cancelled")
+    assert await repo.cancel_running(db, job_id=job_id) == "w-cancelled"
+    await db.execute(
+        "UPDATE jobs SET last_heartbeat_at = now() - interval '1 minute' WHERE id = $1",
+        job_id,
+    )
+
+    reclaimed = await repo.sweep_leases(
+        db,
+        limit=100,
+        stale_worker_grace_s=45,
+    )
+
+    assert reclaimed == 1
+    assert await db.fetchval("SELECT count(*) FROM jobs WHERE id = $1", job_id) == 0
+    assert (
+        await db.fetchval(
+            "SELECT final_state FROM jobs_archive WHERE id = $1",
+            job_id,
+        )
+        == "cancelled"
+    )
 
 
 async def test_sweep_waits_expires_only_past_deadline(db: asyncpg.Connection) -> None:

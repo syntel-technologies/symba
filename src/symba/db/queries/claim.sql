@@ -10,6 +10,8 @@
 --   $3 int     LIMIT (= sum of free slots for the tag group)
 --   $4 text    claimed_by (worker_id)
 --   $5 int     per-group fairness cap (rows of any one group_key per batch)
+--   $6 jsonb   exact reserved-token quota per rate_class. Empty preserves the
+--              direct repository-call behavior used by maintenance/tests.
 --
 -- Invariants:
 --   X1  run_at <= now() is revalidated INSIDE this locking statement — never trust
@@ -36,11 +38,12 @@
 --       small relative to the ungrouped firehose, so the window scan is bounded.
 --   MATERIALIZED on the final candidate set forces one evaluation so the planner
 --   cannot re-run a locking scan in a nested loop and over-claim past LIMIT.
-WITH ungrouped AS (
+WITH ungrouped_unlimited AS (
     SELECT j.id, j.priority, j.run_at
     FROM jobs j
     WHERE j.state = 'queued'
       AND j.group_key IS NULL
+      AND (j.rate_class IS NULL OR $6::jsonb = '{}'::jsonb)
       AND j.run_at <= now()
       AND j.runs_on <@ $1::text[]
       AND ($2::text[] = '{}' OR j.rate_class IS NULL
@@ -49,8 +52,40 @@ WITH ungrouped AS (
     LIMIT $3
     FOR UPDATE OF j SKIP LOCKED
 ),
+rate_ranked AS MATERIALIZED (
+    SELECT j.id, j.priority, j.run_at, j.rate_class,
+           row_number() OVER (
+               PARTITION BY j.rate_class
+               ORDER BY j.priority DESC, j.run_at ASC
+           ) AS rn_in_rate
+    FROM jobs j
+    LEFT JOIN group_running g
+           ON g.tenant = j.tenant
+          AND g.group_key = j.group_key
+          AND g.task_name = j.task_name
+    WHERE $6::jsonb <> '{}'::jsonb
+      AND j.state = 'queued'
+      AND j.rate_class IS NOT NULL
+      AND j.run_at <= now()
+      AND j.runs_on <@ $1::text[]
+      AND ($2::text[] = '{}' OR NOT (j.rate_class = ANY($2)))
+      AND $6::jsonb ? j.rate_class
+      AND COALESCE(($6::jsonb ->> j.rate_class)::int, 0) > 0
+      AND (j.group_key IS NULL OR j.max_concurrent_per_group IS NULL
+           OR COALESCE(g.running, 0) < j.max_concurrent_per_group)
+),
+ungrouped_limited AS (
+    SELECT j.id, j.priority, j.run_at
+    FROM jobs j
+    JOIN rate_ranked r USING (id)
+    WHERE j.group_key IS NULL
+      AND r.rn_in_rate <= COALESCE(($6::jsonb ->> r.rate_class)::int, 0)
+    ORDER BY j.priority DESC, j.run_at ASC
+    LIMIT $3
+    FOR UPDATE OF j SKIP LOCKED
+),
 grouped_ranked AS (
-    SELECT j.id, j.priority, j.run_at,
+    SELECT j.id, j.priority, j.run_at, j.rate_class, rr.rn_in_rate,
            row_number() OVER (PARTITION BY j.group_key
                               ORDER BY j.priority DESC, j.run_at ASC) AS rn_in_group
     FROM jobs j
@@ -58,12 +93,15 @@ grouped_ranked AS (
            ON g.tenant = j.tenant
           AND g.group_key = j.group_key
           AND g.task_name = j.task_name
+    LEFT JOIN rate_ranked rr ON rr.id = j.id
     WHERE j.state = 'queued'
       AND j.group_key IS NOT NULL
       AND j.run_at <= now()
       AND j.runs_on <@ $1::text[]
       AND ($2::text[] = '{}' OR j.rate_class IS NULL
            OR NOT (j.rate_class = ANY($2)))
+      AND ($6::jsonb = '{}'::jsonb OR j.rate_class IS NULL
+           OR rr.id IS NOT NULL)
       AND (j.max_concurrent_per_group IS NULL
            OR COALESCE(g.running, 0) < j.max_concurrent_per_group)
 ),
@@ -72,6 +110,8 @@ grouped AS (
     FROM jobs j
     JOIN grouped_ranked r USING (id)
     WHERE r.rn_in_group <= $5
+      AND ($6::jsonb = '{}'::jsonb OR r.rate_class IS NULL
+           OR r.rn_in_rate <= COALESCE(($6::jsonb ->> r.rate_class)::int, 0))
     ORDER BY j.priority DESC, r.rn_in_group ASC, j.run_at ASC
     LIMIT $3
     FOR UPDATE OF j SKIP LOCKED
@@ -81,7 +121,9 @@ candidate AS MATERIALIZED (
     -- caps the combined batch, highest priority / oldest first, so a mixed
     -- grouped+ungrouped backlog still assigns in priority order.
     SELECT id FROM (
-        SELECT id, priority, run_at FROM ungrouped
+        SELECT id, priority, run_at FROM ungrouped_unlimited
+        UNION ALL
+        SELECT id, priority, run_at FROM ungrouped_limited
         UNION ALL
         SELECT id, priority, run_at FROM grouped
     ) merged

@@ -19,8 +19,10 @@ import pytest
 from symba.config import load_config
 from symba.db.pool import Pools
 from symba.services.job_service import JobService
+from symba.services.loops import Sweeper
 from symba.services.matcher import Matcher
 from symba.services.registry import WorkerConn, WorkerRegistry
+from symba.transport.state import EngineState
 from tests.integration import _helpers as h
 
 pytestmark = [pytest.mark.l2, pytest.mark.asyncio(loop_scope="session")]
@@ -67,6 +69,27 @@ async def test_matcher_respects_free_slots(db: asyncpg.Connection, pools: Pools)
     assert conn.free_slots == 0
     running = await db.fetchval("SELECT count(*) FROM jobs WHERE state = 'running'")
     assert running == 2
+
+
+async def test_matcher_caps_stale_slot_frame_by_attributed_running_jobs(
+    db: asyncpg.Connection,
+    pools: Pools,
+) -> None:
+    for _ in range(4):
+        await h.seed(db, h.spec())
+    registry = WorkerRegistry()
+    conn = WorkerConn(worker_id="w1", tags=frozenset(), free_slots=2, labels={})
+    await registry.register(conn)
+    matcher = Matcher(pools, registry, load_config())
+
+    assert await matcher.pass_() == 2
+    assert await db.fetchval("SELECT count(*) FROM jobs WHERE claimed_by = 'w1'") == 2
+
+    # This frame was produced while the first assignment batch was still in
+    # flight. It must not reopen capacity already consumed by those jobs.
+    await registry.update_slots("w1", free_slots=2)
+    assert await matcher.pass_() == 0
+    assert await db.fetchval("SELECT count(*) FROM jobs WHERE state = 'queued'") == 2
 
 
 async def test_matcher_tag_routing(db: asyncpg.Connection, pools: Pools) -> None:
@@ -169,6 +192,31 @@ async def test_service_fail_dies_when_attempts_exhausted(db: asyncpg.Connection,
     )
     assert outcome.will_retry is False
     assert await h.state_of(db, job_id) == "dead"
+
+
+async def test_sweeper_terminalizes_exhausted_lease_through_job_service(
+    db: asyncpg.Connection,
+    pools: Pools,
+) -> None:
+    spec = h.spec(group_key="g", cap=1, lease_ttl_s=1800)
+    spec.max_attempts = 1
+    spec.on_failure = {"task_name": "t.recover", "payload": {"source": "lease"}}
+    job_id = await h.seed(db, spec)
+    await h.claim_one(db, worker="w-gone")
+    await db.execute(
+        "UPDATE jobs SET lease_expires_at = now() - interval '1 second' WHERE id=$1",
+        job_id,
+    )
+
+    state = EngineState.build(load_config(), pools)
+    processed = await Sweeper(state).pass_()
+
+    assert processed >= 1
+    assert await h.state_of(db, job_id) == "dead"
+    assert await h.group_running(db, "default", "g", "t.echo") == 0
+    assert await db.fetchval("SELECT count(*) FROM jobs WHERE task_name='t.recover' AND state='queued'") == 1
+    error_history = await db.fetchval("SELECT error_history FROM jobs_archive WHERE id=$1", job_id)
+    assert error_history[-1]["type"] == "LeaseAttemptsExhausted"
 
 
 # --------------------------------------------------------------------------- #

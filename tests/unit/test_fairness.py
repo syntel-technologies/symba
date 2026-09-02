@@ -21,8 +21,17 @@ pytestmark = pytest.mark.l1
 
 def _job(jid: str, group: str, priority: int = 5) -> ClaimedJob:
     return ClaimedJob(
-        id=jid, task_name="t", tenant="default", group_key=group, max_concurrent_per_group=None,
-        priority=priority, lease_token="lt", lease_ttl_s=60, payload={}, attempt=1, raw={},
+        id=jid,
+        task_name="t",
+        tenant="default",
+        group_key=group,
+        max_concurrent_per_group=None,
+        priority=priority,
+        lease_token="lt",
+        lease_ttl_s=60,
+        payload={},
+        attempt=1,
+        raw={},
     )
 
 

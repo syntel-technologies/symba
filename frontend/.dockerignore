@@ -1,0 +1,15 @@
+# The frontend image builds its own dependencies and output inside Linux.
+# Never send host-installed packages, generated bundles, or test artifacts to
+# BuildKit's separate ./frontend context.
+node_modules
+dist
+tests
+*.tsbuildinfo
+.DS_Store
+*.log
+.env*
+
+.git
+.github
+.idea
+.vscode

@@ -12,7 +12,7 @@
 services:
   # ===== PostgreSQL (source of truth) =====
   symba-postgres:
-    image: postgres:18.1                  # PG 18 floor: uuidv7() support
+    image: postgres:18.1@sha256:1090bc3a8ccfb0b55f78a494d76f8d603434f7e4553543d6e807bc7bd6bbd17f  # PG 18 floor: uuidv7() support
     container_name: symba-postgres
     # Headroom for engine hot+general pools plus worker fan-out under load.
     command: ["postgres", "-c", "max_connections=300"]
@@ -23,7 +23,7 @@ services:
     ports:
       # Host port is configurable so a dev box already running Postgres on 5432
       # (e.g. another stack) can remap without touching the in-network port.
-      - "${POSTGRES_HOST_PORT:-5432}:5432"
+      - "${SYMBA_INTERNAL_BIND_ADDRESS:-127.0.0.1}:${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       # PG18 images store data in a version-specific subdir and expect the mount
       # at /var/lib/postgresql (NOT .../data, the pre-18 convention) so that
@@ -42,19 +42,25 @@ services:
   # Runs all versioned (V__) SQL from database/symba into the `symba` schema
   # before the engine starts. Version numbers must be unique.
   symba-flyway:
-    image: flyway/flyway:12.0.1
+    build:
+      context: .
+      dockerfile: Dockerfile.flyway
+      args:
+        KNOR_RELEASE_ID: ${KNOR_RELEASE_ID:-development}
+        KNOR_RELEASE_MANIFEST_SHA256: ${KNOR_RELEASE_MANIFEST_SHA256:-unreleased}
+    image: symba-flyway:${KNOR_RELEASE_MANIFEST_SHA256:-unreleased}
     container_name: symba-flyway
     depends_on:
       symba-postgres:
         condition: service_healthy
-    volumes:
-      - ./flyway.toml:/flyway/conf/flyway.toml:ro
-      - ./database/symba:/flyway/sql/symba:ro
     environment:
+      KNOR_RELEASE_ID: ${KNOR_RELEASE_ID:-development}
+      KNOR_RELEASE_MANIFEST_SHA256: ${KNOR_RELEASE_MANIFEST_SHA256:-unreleased}
+      FLYWAY_CONFIG_FILES: "/opt/symba/flyway/flyway.toml"
       FLYWAY_URL: jdbc:postgresql://symba-postgres:5432/${POSTGRES_DB:-symba}
       FLYWAY_USER: ${POSTGRES_USER:-symba}
       FLYWAY_PASSWORD: ${POSTGRES_PASSWORD:-symba}
-      FLYWAY_LOCATIONS: "filesystem:/flyway/sql/symba"
+      FLYWAY_LOCATIONS: "filesystem:/opt/symba/flyway/sql/symba"
       FLYWAY_SCHEMAS: "symba"
       FLYWAY_DEFAULT_SCHEMA: "symba"
       FLYWAY_CREATE_SCHEMAS: "true"
@@ -64,10 +70,10 @@ services:
 
   # ===== Redis (optional) — chaos suite kills it =====
   symba-redis:
-    image: redis:8.4
+    image: redis:8.4@sha256:8df317692c59703c19ecfa90a8cb17703089f3c8e12c2bd0cd6b3c31005e69d8
     container_name: symba-redis
     ports:
-      - "${REDIS_HOST_PORT:-6379}:6379"
+      - "${SYMBA_INTERNAL_BIND_ADDRESS:-127.0.0.1}:${REDIS_HOST_PORT:-6379}:6379"
     networks:
       - symba-network
     healthcheck:
@@ -80,9 +86,19 @@ services:
   symba-engine:
     build:
       context: .
+      args:
+        KNOR_RELEASE_ID: ${KNOR_RELEASE_ID:-development}
+        KNOR_RELEASE_MANIFEST_SHA256: ${KNOR_RELEASE_MANIFEST_SHA256:-unreleased}
     container_name: symba-engine
     environment:
-      SYMBA_POSTGRES__DSN: postgresql://${POSTGRES_USER:-symba}:${POSTGRES_PASSWORD:-symba}@symba-postgres:5432/${POSTGRES_DB:-symba}
+      KNOR_RELEASE_ID: ${KNOR_RELEASE_ID:-development}
+      KNOR_RELEASE_MANIFEST_SHA256: ${KNOR_RELEASE_MANIFEST_SHA256:-unreleased}
+      SYMBA_APP__ENVIRONMENT: ${SYMBA_APP__ENVIRONMENT:-development}
+      SYMBA_POSTGRES__HOST: symba-postgres
+      SYMBA_POSTGRES__PORT: 5432
+      SYMBA_POSTGRES__USER: ${POSTGRES_USER:-symba}
+      SYMBA_POSTGRES__PASSWORD: ${POSTGRES_PASSWORD:-symba}
+      SYMBA_POSTGRES__DATABASE: ${POSTGRES_DB:-symba}
       SYMBA_POSTGRES__SCHEMA_NAME: symba
       SYMBA_REDIS__URL: redis://symba-redis:6379/0
       SYMBA_AUTH__MODE: ${SYMBA_AUTH_MODE:-none}   # dev default; set token in prod
@@ -94,13 +110,18 @@ services:
       SYMBA_AUTH__TRUSTED_PROXY_CIDRS: '["172.31.0.0/24"]'
       # token-mode dev credential (only enforced when SYMBA_AUTH_MODE=token). Maps the
       # shared secret -> tenant. The SPA login page exchanges this for a stored session.
-      SYMBA_AUTH__TOKENS: '{"${SYMBA_DEV_TOKEN:-dev-secret-token}":"default"}'
+      SYMBA_AUTH__TOKENS: '{"${SYMBA_DEV_TOKEN:-}":"default"}'
+      SYMBA_SERVER__GRPC_TLS_ENABLED: ${SYMBA_GRPC_TLS_ENABLED:-false}
+      SYMBA_SERVER__GRPC_TLS_CERT_FILE: ${SYMBA_GRPC_TLS_CERT_FILE_CONTAINER:-}
+      SYMBA_SERVER__GRPC_TLS_KEY_FILE: ${SYMBA_GRPC_TLS_KEY_FILE_CONTAINER:-}
+      SYMBA_SERVER__GRPC_TLS_CLIENT_CA_FILE: ${SYMBA_GRPC_TLS_CLIENT_CA_FILE_CONTAINER:-}
+      SYMBA_SERVER__GRPC_TLS_REQUIRE_CLIENT_AUTH: ${SYMBA_GRPC_TLS_REQUIRE_CLIENT_AUTH:-false}
       SYMBA_LOG__LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       # Host ports are configurable so multiple stacks (e.g. a second symba
       # checkout, or another engine) can run side by side without clashing.
-      - "${ENGINE_GRPC_HOST_PORT:-7233}:7233"
-      - "${ENGINE_HTTP_HOST_PORT:-7300}:7300"
+      - "${SYMBA_GRPC_BIND_ADDRESS:-127.0.0.1}:${ENGINE_GRPC_HOST_PORT:-7233}:7233"
+      - "${SYMBA_HTTP_BIND_ADDRESS:-127.0.0.1}:${ENGINE_HTTP_HOST_PORT:-7300}:7300"
     depends_on:
       symba-flyway:
         condition: service_completed_successfully
@@ -118,12 +139,17 @@ services:
   symba-frontend:
     build:
       context: ./frontend
+      args:
+        KNOR_RELEASE_ID: ${KNOR_RELEASE_ID:-development}
+        KNOR_RELEASE_MANIFEST_SHA256: ${KNOR_RELEASE_MANIFEST_SHA256:-unreleased}
     container_name: symba-frontend
     environment:
+      KNOR_RELEASE_ID: ${KNOR_RELEASE_ID:-development}
+      KNOR_RELEASE_MANIFEST_SHA256: ${KNOR_RELEASE_MANIFEST_SHA256:-unreleased}
       ENGINE_HOST: symba-engine
       ENGINE_PORT: "7300"
     ports:
-      - "${UI_HOST_PORT:-8080}:80"
+      - "${SYMBA_HTTP_BIND_ADDRESS:-127.0.0.1}:${UI_HOST_PORT:-8080}:8080"
     depends_on:
       - symba-engine
     networks:

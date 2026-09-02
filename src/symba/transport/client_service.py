@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC
+from typing import Any
 
 import grpc
 from google.protobuf.timestamp_pb2 import Timestamp
@@ -69,7 +70,7 @@ _STATE_TO_PROTO = {
 _PROTO_TO_STATE = {v: k.value for k, v in _STATE_TO_PROTO.items()}
 
 
-async def _abort(context: grpc.aio.ServicerContext, err: SymbaError) -> None:
+async def _abort(context: grpc.aio.ServicerContext[Any, Any], err: SymbaError) -> None:
     code = _GRPC_CODES.get(err.grpc_code, grpc.StatusCode.INTERNAL)
     await context.abort(code, err.message)
 
@@ -195,6 +196,10 @@ def _job_from_list_item(item: object) -> common.Job:
         attempt=item.attempt,  # type: ignore[attr-defined]
     )
     job.spec.task_name = item.task_name  # type: ignore[attr-defined]
+    if item.pipeline:  # type: ignore[attr-defined]
+        job.spec.pipeline = item.pipeline  # type: ignore[attr-defined]
+    if item.stage:  # type: ignore[attr-defined]
+        job.spec.stage = item.stage  # type: ignore[attr-defined]
     if item.ctx_id:  # type: ignore[attr-defined]
         job.spec.ctx_id = item.ctx_id  # type: ignore[attr-defined]
     if item.group_key:  # type: ignore[attr-defined]
@@ -228,7 +233,11 @@ class ClientServicer(cp_grpc.ClientServiceServicer):
         self._query = query
         self._events = events
 
-    async def Submit(self, request: cp.SubmitRequest, context: grpc.aio.ServicerContext) -> cp.SubmitResponse:
+    async def Submit(
+        self,
+        request: cp.SubmitRequest,
+        context: grpc.aio.ServicerContext[cp.SubmitRequest, cp.SubmitResponse],
+    ) -> cp.SubmitResponse:
         tenant = request.tenant or _DEFAULT_TENANT
         specs = [_spec_from_proto(tenant, s) for s in request.specs]
         try:
@@ -238,7 +247,11 @@ class ClientServicer(cp_grpc.ClientServiceServicer):
             raise
         return cp.SubmitResponse(job_ids=outcome.job_ids, deduplicated=outcome.deduplicated)
 
-    async def FanOut(self, request: cp.FanOutRequest, context: grpc.aio.ServicerContext) -> cp.FanOutResponse:
+    async def FanOut(
+        self,
+        request: cp.FanOutRequest,
+        context: grpc.aio.ServicerContext[cp.FanOutRequest, cp.FanOutResponse],
+    ) -> cp.FanOutResponse:
         tenant = request.tenant or _DEFAULT_TENANT
         try:
             outcome = await self._fanout.fan_out(
@@ -255,7 +268,11 @@ class ClientServicer(cp_grpc.ClientServiceServicer):
             raise
         return cp.FanOutResponse(child_job_ids=outcome.child_job_ids, gate_id=outcome.gate_id)
 
-    async def GetGate(self, request: cp.GetGateRequest, context: grpc.aio.ServicerContext) -> cp.GateStatus:
+    async def GetGate(
+        self,
+        request: cp.GetGateRequest,
+        context: grpc.aio.ServicerContext[cp.GetGateRequest, cp.GateStatus],
+    ) -> cp.GateStatus:
         # Authoritative gate aggregate straight from the gates row. The SDK's
         # Gate.status() calls this instead of recounting child jobs, because only the
         # gate row records succeeded EXCLUDING ctx.skip() children (skips settle the
@@ -273,7 +290,11 @@ class ClientServicer(cp_grpc.ClientServiceServicer):
         _set_ts(status.fired_at, row.fired_at)
         return status
 
-    async def GetJob(self, request: cp.GetJobRequest, context: grpc.aio.ServicerContext) -> common.Job:
+    async def GetJob(
+        self,
+        request: cp.GetJobRequest,
+        context: grpc.aio.ServicerContext[cp.GetJobRequest, common.Job],
+    ) -> common.Job:
         tenant = request.tenant or _DEFAULT_TENANT
         try:
             row = await self._submit.get_job(job_id=request.job_id, tenant=tenant)
@@ -282,7 +303,11 @@ class ClientServicer(cp_grpc.ClientServiceServicer):
             raise
         return _job_from_row(row)
 
-    async def AwaitJob(self, request: cp.AwaitJobRequest, context: grpc.aio.ServicerContext) -> common.Job:
+    async def AwaitJob(
+        self,
+        request: cp.AwaitJobRequest,
+        context: grpc.aio.ServicerContext[cp.AwaitJobRequest, common.Job],
+    ) -> common.Job:
         # Server-side long-poll: read get_job on a short cadence until the job is
         # terminal or the caller's timeout elapses. Bounded by timeout_s (default 30s).
         tenant = request.tenant or _DEFAULT_TENANT
@@ -298,7 +323,11 @@ class ClientServicer(cp_grpc.ClientServiceServicer):
                 return _job_from_row(row)
             await asyncio.sleep(poll_interval_s)
 
-    async def Cancel(self, request: cp.CancelRequest, context: grpc.aio.ServicerContext) -> cp.CancelResponse:
+    async def Cancel(
+        self,
+        request: cp.CancelRequest,
+        context: grpc.aio.ServicerContext[cp.CancelRequest, cp.CancelResponse],
+    ) -> cp.CancelResponse:
         tenant = request.tenant or _DEFAULT_TENANT
         try:
             # Tenant guard: get_job raises NotFound (404 / NOT_FOUND) for a foreign or
@@ -314,7 +343,11 @@ class ClientServicer(cp_grpc.ClientServiceServicer):
             note=outcome.note,
         )
 
-    async def Signal(self, request: cp.SignalRequest, context: grpc.aio.ServicerContext) -> cp.SignalResponse:
+    async def Signal(
+        self,
+        request: cp.SignalRequest,
+        context: grpc.aio.ServicerContext[cp.SignalRequest, cp.SignalResponse],
+    ) -> cp.SignalResponse:
         tenant = request.tenant or _DEFAULT_TENANT
         payload = _decode_payload(request.payload_json)
         try:
@@ -329,7 +362,11 @@ class ClientServicer(cp_grpc.ClientServiceServicer):
             raise
         return cp.SignalResponse(delivered=1 if outcome.delivered else 0)
 
-    async def Resubmit(self, request: cp.ResubmitRequest, context: grpc.aio.ServicerContext) -> cp.SubmitResponse:
+    async def Resubmit(
+        self,
+        request: cp.ResubmitRequest,
+        context: grpc.aio.ServicerContext[cp.ResubmitRequest, cp.SubmitResponse],
+    ) -> cp.SubmitResponse:
         tenant = request.tenant or _DEFAULT_TENANT
         outcomes = await self._resubmit.resubmit_many(job_ids=list(request.job_ids), tenant=tenant)
         # SubmitResponse carries the fresh job ids; a skipped (non-terminal/unknown) id
@@ -339,19 +376,28 @@ class ClientServicer(cp_grpc.ClientServiceServicer):
             deduplicated=[False] * len(outcomes),
         )
 
-    async def Query(self, request: cp.QueryRequest, context: grpc.aio.ServicerContext) -> cp.QueryResponse:
+    async def Query(
+        self,
+        request: cp.QueryRequest,
+        context: grpc.aio.ServicerContext[cp.QueryRequest, cp.QueryResponse],
+    ) -> cp.QueryResponse:
         # The service exposes offset paging; encode the next offset in page_token so
         # the SDK's keyset-style cursor loop terminates when next_page_token is empty.
         tenant = request.tenant or _DEFAULT_TENANT
         page_size = request.page_size or 100
         offset = int(request.page_token) if request.page_token else 0
         state = _PROTO_TO_STATE.get(request.state) if request.state else None
+        created_after = request.created_after.ToDatetime(tzinfo=UTC) if request.HasField("created_after") else None
         items = await self._query.jobs(
             tenant=tenant,
             state=state,
             task_name=request.task_name or None,
             ctx_id=request.ctx_id or None,
             parent_gate_id=request.parent_gate_id or None,
+            pipeline=request.pipeline or None,
+            stage=request.stage or None,
+            group_key=request.group_key or None,
+            created_after=created_after,
             limit=page_size,
             offset=offset,
         )
@@ -361,7 +407,11 @@ class ClientServicer(cp_grpc.ClientServiceServicer):
         next_token = str(offset + page_size) if len(items) == page_size else ""
         return cp.QueryResponse(jobs=jobs, next_page_token=next_token)
 
-    async def StreamEvents(self, request: cp.StreamEventsRequest, context: grpc.aio.ServicerContext):
+    async def StreamEvents(
+        self,
+        request: cp.StreamEventsRequest,
+        context: grpc.aio.ServicerContext[cp.StreamEventsRequest, common.JobEvent],
+    ):
         # Two modes on one RPC (see StreamEventsRequest.snapshot):
         #   snapshot=true  -> replay the persisted ledger for ctx_id from the start,
         #                     paging until exhausted, then RETURN (stream closes). This
@@ -373,14 +423,10 @@ class ClientServicer(cp_grpc.ClientServiceServicer):
 
         if request.snapshot:
             if ctx_id is None:
-                await context.abort(
-                    grpc.StatusCode.INVALID_ARGUMENT, "snapshot StreamEvents requires ctx_id"
-                )
+                await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "snapshot StreamEvents requires ctx_id")
             after_id = 0
             while True:
-                rows = await self._events.snapshot_for_ctx(
-                    tenant=tenant, ctx_id=ctx_id, after_id=after_id
-                )
+                rows = await self._events.snapshot_for_ctx(tenant=tenant, ctx_id=ctx_id, after_id=after_id)
                 for row in rows:
                     yield _event_to_proto(row)
                 if len(rows) < _EVENT_PAGE:

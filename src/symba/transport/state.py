@@ -11,7 +11,9 @@ service instance.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
+
+import asyncpg
 
 from symba.config import SymbaConfig
 from symba.db import repository as repo
@@ -45,7 +47,8 @@ def _build_registry(pools: Pools) -> WorkerRegistry:
 
     async def _upsert(worker_id: str, tags: list[str], labels: dict[str, Any], slots: int, slots_busy: int) -> None:
         try:
-            async with pools.general.acquire() as conn:
+            async with pools.general.acquire() as pooled_connection:
+                conn = cast(asyncpg.Connection, pooled_connection)
                 await repo.worker_upsert(
                     conn, worker_id=worker_id, tags=tags, labels=labels, slots=slots, slots_busy=slots_busy
                 )
@@ -54,7 +57,8 @@ def _build_registry(pools: Pools) -> WorkerRegistry:
 
     async def _delete(worker_id: str) -> None:
         try:
-            async with pools.general.acquire() as conn:
+            async with pools.general.acquire() as pooled_connection:
+                conn = cast(asyncpg.Connection, pooled_connection)
                 await repo.worker_delete(conn, worker_id=worker_id)
         except Exception:
             logger.error("[registry] Worker delete failed", worker_id=worker_id, exc_info=True)

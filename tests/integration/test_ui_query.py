@@ -67,8 +67,12 @@ async def _drive_dead(engine: EngineState) -> str:
     assert await engine.matcher.pass_() == 1
     a = worker.queue.get_nowait()
     await engine.jobs.fail(
-        job_id=a.job.id, lease_token=a.lease_token, error_type="boom",
-        error_message="fatal", stack_hash="h1", retryable=False,
+        job_id=a.job.id,
+        lease_token=a.lease_token,
+        error_type="boom",
+        error_message="fatal",
+        stack_hash="h1",
+        retryable=False,
     )
     return a.job.id
 
@@ -96,6 +100,39 @@ async def test_list_jobs_filters_by_ctx(engine: EngineState) -> None:
     async with _client(engine) as client:
         rows = (await client.get("/v1/jobs", params={"ctx_id": "ctx-42"})).json()["jobs"]
         assert rows and all(j["ctx_id"] == "ctx-42" for j in rows)
+
+
+async def test_query_service_honors_native_pipeline_filters(engine: EngineState) -> None:
+    await engine.submit.submit(
+        [
+            SubmitSpec(
+                task_name="t.scope-a",
+                payload={},
+                pipeline="iknowledge:index:a",
+                stage="embed",
+                group_key="embed:a",
+            ),
+            SubmitSpec(
+                task_name="t.scope-b",
+                payload={},
+                pipeline="iknowledge:index:b",
+                stage="summarize",
+                group_key="summarize:b",
+            ),
+        ]
+    )
+
+    rows = await engine.query.jobs(
+        pipeline="iknowledge:index:a",
+        stage="embed",
+        group_key="embed:a",
+        limit=50,
+    )
+
+    assert rows
+    assert {row.pipeline for row in rows} == {"iknowledge:index:a"}
+    assert {row.stage for row in rows} == {"embed"}
+    assert {row.group_key for row in rows} == {"embed:a"}
 
 
 async def test_list_jobs_page_cap_enforced(engine: EngineState) -> None:
@@ -133,7 +170,10 @@ async def test_workers_lists_registered_fleet(db: asyncpg.Connection, engine: En
     # maintains. Seed a row directly to prove the read path.
     await db.execute(
         "INSERT INTO workers (worker_id, tags, slots, slots_busy) VALUES ($1, $2, $3, $4)",
-        "w-fleet", ["gpu"], 8, 3,
+        "w-fleet",
+        ["gpu"],
+        8,
+        3,
     )
     async with _client(engine) as client:
         workers = (await client.get("/v1/workers")).json()["workers"]
@@ -201,9 +241,9 @@ async def test_sweeper_marks_stale_worker(db: asyncpg.Connection, engine: Engine
     cfg = engine.config.sweeper
     stale_after_s = cfg.worker_stale_after_heartbeats * cfg.worker_heartbeat_interval_s
     await db.execute(
-        "INSERT INTO workers (worker_id, slots, last_seen) "
-        "VALUES ($1, 4, now() - make_interval(secs => $2))",
-        "w-dead", stale_after_s + 60,
+        "INSERT INTO workers (worker_id, slots, last_seen) VALUES ($1, 4, now() - make_interval(secs => $2))",
+        "w-dead",
+        stale_after_s + 60,
     )
     await db.execute("INSERT INTO workers (worker_id, slots, last_seen) VALUES ($1, 4, now())", "w-alive")
 
@@ -219,7 +259,9 @@ async def test_sweeper_marks_stale_worker(db: asyncpg.Connection, engine: Engine
 async def test_cron_list_and_toggle(db: asyncpg.Connection, engine: EngineState) -> None:
     await db.execute(
         "INSERT INTO cron_schedules (schedule_id, cron_expr, task_name) VALUES ($1, $2, $3)",
-        "sched-1", "*/5 * * * *", "t.cron",
+        "sched-1",
+        "*/5 * * * *",
+        "t.cron",
     )
     async with _client(engine) as client:
         listed = (await client.get("/v1/cron")).json()["schedules"]
@@ -276,9 +318,10 @@ async def test_cron_upsert_creates_then_updates(db: asyncpg.Connection, engine: 
 
 async def test_cron_upsert_expr_change_resets_next_fire(db: asyncpg.Connection, engine: EngineState) -> None:
     await db.execute(
-        "INSERT INTO cron_schedules (schedule_id, cron_expr, task_name, next_fire) "
-        "VALUES ($1, $2, $3, now())",
-        "recon", "*/30 * * * *", "t.cron",
+        "INSERT INTO cron_schedules (schedule_id, cron_expr, task_name, next_fire) VALUES ($1, $2, $3, now())",
+        "recon",
+        "*/30 * * * *",
+        "t.cron",
     )
     async with _client(engine) as client:
         resp = await client.post(
@@ -307,7 +350,9 @@ async def test_cron_upsert_bad_expr_is_422(engine: EngineState) -> None:
 async def test_cron_delete_removes_row(db: asyncpg.Connection, engine: EngineState) -> None:
     await db.execute(
         "INSERT INTO cron_schedules (schedule_id, cron_expr, task_name) VALUES ($1, $2, $3)",
-        "gone", "*/5 * * * *", "t.cron",
+        "gone",
+        "*/5 * * * *",
+        "t.cron",
     )
     async with _client(engine) as client:
         resp = await client.delete("/v1/cron/gone")
@@ -356,7 +401,9 @@ async def test_event_stream_fans_out_new_events(db: asyncpg.Connection, engine: 
             # Append a fresh ledger row AFTER subscribing; the poller must deliver it.
             await db.execute(
                 "INSERT INTO job_events (job_id, tenant, event) VALUES ($1, $2, $3)",
-                "00000000-0000-0000-0000-0000000000aa", "default", "unit_test_ping",
+                "00000000-0000-0000-0000-0000000000aa",
+                "default",
+                "unit_test_ping",
             )
             row = await asyncio.wait_for(queue.get(), timeout=3.0)
             assert row.event == "unit_test_ping"
@@ -374,7 +421,9 @@ async def test_event_stream_tenant_scoped(db: asyncpg.Connection, engine: Engine
             # A foreign-tenant event must NOT reach a default-tenant subscriber.
             await db.execute(
                 "INSERT INTO job_events (job_id, tenant, event) VALUES ($1, $2, $3)",
-                "00000000-0000-0000-0000-0000000000bb", "acme", "foreign_ping",
+                "00000000-0000-0000-0000-0000000000bb",
+                "acme",
+                "foreign_ping",
             )
             with pytest.raises(TimeoutError):
                 await asyncio.wait_for(queue.get(), timeout=1.5)

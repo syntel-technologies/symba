@@ -16,7 +16,8 @@ deploy must run `token` or `mtls`. In `token` mode send `Authorization: Bearer <
 **The tenant is authoritative from the credential (N9)** — a `tenant` field in a request
 body is ignored; you cannot submit into or read another tenant's jobs.
 
-`EventSource` can't set headers, so the SSE endpoint also accepts `?access_token=`.
+The SSE endpoint follows the same header-only policy. Credentials in query strings are
+rejected so they cannot leak into URLs, access logs, histories, or referrers.
 
 ## Health & metrics (no auth)
 
@@ -66,7 +67,7 @@ body is ignored; you cannot submit into or read another tenant's jobs.
 | GET | `/v1/jobs/{id}/events` | — | the immutable `job_events` ledger (N8) |
 | GET | `/v1/jobs/{id}/tree` | — | DAG edges (chain / dep / gate) |
 | GET | `/v1/jobs/{id}/checkpoints` | — | `{job_id, checkpoint}` |
-| GET | `/v1/events/stream` | `?access_token=` | SSE `text/event-stream` of live `job_events` |
+| GET | `/v1/events/stream` | `Authorization` header | SSE `text/event-stream` of live `job_events` |
 
 > `state_filter=dead` is the dead-letter queue; DEAD jobs are never auto-pruned.
 

@@ -28,6 +28,7 @@ boundary; this servicer reads the request tenant as the query scope.
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import grpc
 
@@ -46,7 +47,7 @@ _GRPC_CODES = {name: getattr(grpc.StatusCode, name) for name in dir(grpc.StatusC
 _DEFAULT_TENANT = "default"
 
 
-async def _abort(context: grpc.aio.ServicerContext, err: SymbaError) -> None:
+async def _abort(context: grpc.aio.ServicerContext[Any, Any], err: SymbaError) -> None:
     code = _GRPC_CODES.get(err.grpc_code, grpc.StatusCode.INTERNAL)
     await context.abort(code, err.message)
 
@@ -94,7 +95,12 @@ class AdminServicer(admin_grpc.AdminServiceServicer):
         self._rate_limiter = rate_limiter
 
     async def ListRateClasses(
-        self, request: admin.ListRateClassesRequest, context: grpc.aio.ServicerContext
+        self,
+        request: admin.ListRateClassesRequest,
+        context: grpc.aio.ServicerContext[
+            admin.ListRateClassesRequest,
+            admin.ListRateClassesResponse,
+        ],
     ) -> admin.ListRateClassesResponse:
         classes = await self._rate_limiter.list_classes()
         return admin.ListRateClassesResponse(
@@ -102,7 +108,9 @@ class AdminServicer(admin_grpc.AdminServiceServicer):
         )
 
     async def UpsertRateClass(
-        self, request: admin.RateClass, context: grpc.aio.ServicerContext
+        self,
+        request: admin.RateClass,
+        context: grpc.aio.ServicerContext[admin.RateClass, admin.RateClass],
     ) -> admin.RateClass:
         try:
             await self._rate_limiter.upsert(
@@ -111,19 +119,21 @@ class AdminServicer(admin_grpc.AdminServiceServicer):
         except SymbaError as err:
             await _abort(context, err)
             raise
-        return admin.RateClass(
-            name=request.name, capacity=request.capacity, refill_per_s=request.refill_per_s
-        )
+        return admin.RateClass(name=request.name, capacity=request.capacity, refill_per_s=request.refill_per_s)
 
     async def ListCronSchedules(
-        self, request: admin.ListCronRequest, context: grpc.aio.ServicerContext
+        self,
+        request: admin.ListCronRequest,
+        context: grpc.aio.ServicerContext[admin.ListCronRequest, admin.ListCronResponse],
     ) -> admin.ListCronResponse:
         tenant = request.tenant or _DEFAULT_TENANT
         rows = await self._query.cron(tenant=tenant)
         return admin.ListCronResponse(schedules=[_cron_to_proto(r) for r in rows])
 
     async def UpsertCronSchedule(
-        self, request: admin.CronSchedule, context: grpc.aio.ServicerContext
+        self,
+        request: admin.CronSchedule,
+        context: grpc.aio.ServicerContext[admin.CronSchedule, admin.CronSchedule],
     ) -> admin.CronSchedule:
         tenant = request.tenant or _DEFAULT_TENANT
         payload = json.loads(request.payload_json.decode()) if request.payload_json else {}
@@ -142,7 +152,9 @@ class AdminServicer(admin_grpc.AdminServiceServicer):
         return _cron_to_proto(row)
 
     async def SetCronEnabled(
-        self, request: admin.SetCronEnabledRequest, context: grpc.aio.ServicerContext
+        self,
+        request: admin.SetCronEnabledRequest,
+        context: grpc.aio.ServicerContext[admin.SetCronEnabledRequest, admin.CronSchedule],
     ) -> admin.CronSchedule:
         tenant = request.tenant or _DEFAULT_TENANT
         try:
@@ -155,7 +167,9 @@ class AdminServicer(admin_grpc.AdminServiceServicer):
         return _cron_to_proto(row)
 
     async def DeleteCronSchedule(
-        self, request: admin.DeleteCronRequest, context: grpc.aio.ServicerContext
+        self,
+        request: admin.DeleteCronRequest,
+        context: grpc.aio.ServicerContext[admin.DeleteCronRequest, admin.DeleteCronResponse],
     ) -> admin.DeleteCronResponse:
         tenant = request.tenant or _DEFAULT_TENANT
         try:
@@ -166,7 +180,9 @@ class AdminServicer(admin_grpc.AdminServiceServicer):
         return admin.DeleteCronResponse(deleted=True)
 
     async def ListWorkers(
-        self, request: admin.ListWorkersRequest, context: grpc.aio.ServicerContext
+        self,
+        request: admin.ListWorkersRequest,
+        context: grpc.aio.ServicerContext[admin.ListWorkersRequest, admin.ListWorkersResponse],
     ) -> admin.ListWorkersResponse:
         rows = await self._query.workers()
         return admin.ListWorkersResponse(workers=[_worker_to_proto(r) for r in rows])

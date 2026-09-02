@@ -218,8 +218,7 @@ async def test_chaos3_redis_kill_falls_back_to_pg_with_one_warning(
     # Log-once discipline: exactly one degraded-mode WARNING for the whole outage,
     # not one per reserve (a chatty limiter would drown the logs during an outage).
     degraded_warnings = [
-        r for r in caplog.records
-        if r.levelno == logging.WARNING and "falling back to PG" in r.getMessage()
+        r for r in caplog.records if r.levelno == logging.WARNING and "falling back to PG" in r.getMessage()
     ]
     assert len(degraded_warnings) == 1, f"expected one degraded WARNING, got {len(degraded_warnings)}"
 
@@ -236,9 +235,7 @@ async def test_chaos4_signal_wins_race_against_timeout(db: asyncpg.Connection, p
 
     # Park the job WAITING with an ALREADY-past deadline: the signal and the sweeper's
     # timeout are now both eligible to resume it. This is the crash-window race.
-    await signals.wait(
-        job_id=job_id, lease_token=claimed.lease_token, tenant="default", wait_key="k", timeout_s=1
-    )
+    await signals.wait(job_id=job_id, lease_token=claimed.lease_token, tenant="default", wait_key="k", timeout_s=1)
     await db.execute("UPDATE jobs SET wait_expires_at = now() - interval '1 s' WHERE id = $1", job_id)
 
     # The signal wins: it wakes the WAITING job with its payload -> QUEUED.
@@ -259,9 +256,7 @@ async def test_chaos4_signal_wins_race_against_timeout(db: asyncpg.Connection, p
 # --------------------------------------------------------------------------- #
 
 
-async def test_chaos5_worker_dies_while_waiting_resumes_with_checkpoint(
-    db: asyncpg.Connection, pools: Pools
-) -> None:
+async def test_chaos5_worker_dies_while_waiting_resumes_with_checkpoint(db: asyncpg.Connection, pools: Pools) -> None:
     signals = SignalService(pools, WorkerRegistry())
     checkpoints = CheckpointService(pools, RateLimiter(load_config().redis, pools))
     job_id = await h.seed(db, h.spec(task_name="t.longrun"))

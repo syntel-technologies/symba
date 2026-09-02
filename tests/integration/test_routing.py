@@ -80,15 +80,11 @@ async def test_group_ceiling_cap1_is_exact_across_batches(db: asyncpg.Connection
     for _ in range(3):
         await h.seed(db, h.spec(task_name="webhook", group_key="cust-1", cap=1))
 
-    first = await repo.claim(
-        db, worker_tags=[], exhausted_rate_classes=[], limit=10, claimed_by="w1", per_group_cap=1
-    )
+    first = await repo.claim(db, worker_tags=[], exhausted_rate_classes=[], limit=10, claimed_by="w1", per_group_cap=1)
     assert len(first) == 1, "cap=1 -> exactly one claimable"
     assert await h.group_running(db, "default", "cust-1", "webhook") == 1
 
-    second = await repo.claim(
-        db, worker_tags=[], exhausted_rate_classes=[], limit=10, claimed_by="w2", per_group_cap=1
-    )
+    second = await repo.claim(db, worker_tags=[], exhausted_rate_classes=[], limit=10, claimed_by="w2", per_group_cap=1)
     assert second == [], "committed counter == cap -> the slot is taken"
 
     # Complete the running one; exactly one more becomes claimable (never two).
@@ -96,9 +92,7 @@ async def test_group_ceiling_cap1_is_exact_across_batches(db: asyncpg.Connection
     await svc.complete(job_id=first[0].id, lease_token=first[0].lease_token, result=None)
     assert await h.group_running(db, "default", "cust-1", "webhook") == 0
 
-    third = await repo.claim(
-        db, worker_tags=[], exhausted_rate_classes=[], limit=10, claimed_by="w3", per_group_cap=1
-    )
+    third = await repo.claim(db, worker_tags=[], exhausted_rate_classes=[], limit=10, claimed_by="w3", per_group_cap=1)
     assert len(third) == 1, "one freed slot -> exactly one more, never two"
     assert await h.group_running(db, "default", "cust-1", "webhook") == 1
 
@@ -110,14 +104,10 @@ async def test_group_ceiling_blocks_second_batch_at_cap(db: asyncpg.Connection) 
     for _ in range(4):
         await h.seed(db, h.spec(task_name="webhook", group_key="cust-9", cap=2))
 
-    first = await repo.claim(
-        db, worker_tags=[], exhausted_rate_classes=[], limit=10, claimed_by="w1", per_group_cap=2
-    )
+    first = await repo.claim(db, worker_tags=[], exhausted_rate_classes=[], limit=10, claimed_by="w1", per_group_cap=2)
     assert len(first) == 2 and await h.group_running(db, "default", "cust-9", "webhook") == 2
 
-    second = await repo.claim(
-        db, worker_tags=[], exhausted_rate_classes=[], limit=10, claimed_by="w2", per_group_cap=2
-    )
+    second = await repo.claim(db, worker_tags=[], exhausted_rate_classes=[], limit=10, claimed_by="w2", per_group_cap=2)
     assert second == [], "counter at cap -> next batch is blocked from the group entirely"
 
 

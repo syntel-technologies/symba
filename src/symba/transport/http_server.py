@@ -375,14 +375,9 @@ def build_app(state: EngineState) -> FastAPI:
         if request.url.path in _PUBLIC_PATHS or not request.url.path.startswith("/v1"):
             return await call_next(request)
         peer_ip = request.client.host if request.client else None
-        # SSE fallback: the browser EventSource API cannot set an Authorization header,
-        # so /v1/events/stream accepts the credential as ?access_token= instead.
-        authorization = request.headers.get("authorization")
-        if authorization is None and (qs_token := request.query_params.get("access_token")):
-            authorization = f"Bearer {qs_token}"
         try:
             principal = authenticator.authenticate(
-                authorization=authorization,
+                authorization=request.headers.get("authorization"),
                 tenant_header=request.headers.get("x-symba-tenant"),
                 peer_ip=peer_ip,
             )
@@ -574,7 +569,7 @@ def build_app(state: EngineState) -> FastAPI:
     async def events_stream(request: Request, principal: Principal = Depends(require_principal)) -> StreamingResponse:
         # Server-Sent Events: one long-lived text/event-stream fed by the engine's
         # in-process ledger fan-out. A keepalive comment every 15s holds the
-        # connection through proxies; the client (EventSource) auto-reconnects.
+        # connection through proxies; the fetch-based UI client auto-reconnects.
         async def _gen() -> AsyncIterator[bytes]:
             async with state.events.subscribe(tenant=principal.tenant) as queue:
                 while True:

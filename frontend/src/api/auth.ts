@@ -8,8 +8,8 @@
 // credential is required or has gone stale.
 //
 // The token is a shared secret, so we keep it in localStorage (survives reloads) and
-// send it as `Authorization: Bearer <token>`. SSE (EventSource) cannot set headers, so
-// the engine also accepts it as `?access_token=` — see authedEventSourceUrl().
+// send it only as `Authorization: Bearer <token>`. The SSE client uses fetch rather
+// than EventSource so the same header-only credential policy applies everywhere.
 
 const TOKEN_KEY = "symba.auth.token";
 
@@ -61,13 +61,4 @@ export function onUnauthorized(): void {
 export function authHeaders(): Record<string, string> {
   const token = getToken();
   return token ? { authorization: `Bearer ${token}` } : {};
-}
-
-// EventSource can't send headers; the engine reads the credential from ?access_token=
-// as a fallback (http_server auth middleware). Only appended when a token exists.
-export function authedEventSourceUrl(url: string): string {
-  const token = getToken();
-  if (!token) return url;
-  const sep = url.includes("?") ? "&" : "?";
-  return `${url}${sep}access_token=${encodeURIComponent(token)}`;
 }

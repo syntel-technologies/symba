@@ -92,9 +92,7 @@ class JobService:
                 term = await repo.complete_move(conn, job_id=job_id, lease_token=lease_token, result=result)
                 if term is None:
                     raise StaleLease(job_id=job_id)
-                await repo.decrement_group(
-                    conn, tenant=term.tenant, group_key=term.group_key, task_name=term.task_name
-                )
+                await repo.decrement_group(conn, tenant=term.tenant, group_key=term.group_key, task_name=term.task_name)
 
                 # Chain continuation: advance unless the worker called stop_chain.
                 if not drop_chain_tail:
@@ -188,9 +186,7 @@ class JobService:
         # as a fresh QUEUED job in the SAME tx so the continuation is durable with
         # the fire and immediately claimable. remaining_deps=0: the gate WAS the
         # barrier, so the continuation has no further deps to satisfy.
-        oc = _merge_gate_manifest(
-            fire.on_complete, gate_id=parent_gate_id, fire=fire, results=child_results
-        )
+        oc = _merge_gate_manifest(fire.on_complete, gate_id=parent_gate_id, fire=fire, results=child_results)
         spec = SubmitSpec(**{**oc, "tenant": fire.tenant, "ctx_id": fire.ctx_id, "state": JobState.QUEUED})
         await repo.submit(conn, spec)
         return True
@@ -275,17 +271,13 @@ class JobService:
             raise StaleLease(job_id=job_id)
         return row["lease_expires_at"], row["cancel_requested"]
 
-    async def get_result(
-        self, *, job_id: str, tenant: str, task_name: str | None = None
-    ) -> tuple[bytes, bool]:
+    async def get_result(self, *, job_id: str, tenant: str, task_name: str | None = None) -> tuple[bytes, bool]:
         # task_name set (lazy ctx.output.fetch): job_id is the ASKING job (authz
         # scope) and we resolve the ancestor named task_name within its ctx_id.
         # task_name empty (direct result read): job_id IS the target.
         async with self._pools.acquire_hot() as conn:
             if task_name:
-                row = await repo.get_ancestor_result(
-                    conn, asking_job_id=job_id, task_name=task_name, tenant=tenant
-                )
+                row = await repo.get_ancestor_result(conn, asking_job_id=job_id, task_name=task_name, tenant=tenant)
             else:
                 row = await repo.get_result(conn, job_id=job_id, tenant=tenant)
         if row is None or row.result is None:

@@ -24,6 +24,7 @@ from typing import Any
 
 from croniter import croniter
 
+from symba.core.errors import StaleLease
 from symba.db import repository as repo
 from symba.db.records import CronDue, SubmitSpec
 from symba.observability import metrics
@@ -146,7 +147,38 @@ class Sweeper(PeriodicLoop):
             if not await repo.try_sweeper_lock(conn):
                 return 0  # another engine is sweeping this pass
             try:
-                reclaimed = await repo.sweep_leases(conn, limit=cfg.batch_size)
+                stale_after_s = cfg.worker_stale_after_heartbeats * cfg.worker_heartbeat_interval_s
+                exhausted_candidates = await repo.list_exhausted_leases(
+                    conn,
+                    limit=cfg.batch_size,
+                    stale_worker_grace_s=stale_after_s,
+                )
+                exhausted = 0
+                for candidate in exhausted_candidates:
+                    try:
+                        await self.state.jobs.fail(
+                            job_id=candidate.job_id,
+                            lease_token=candidate.lease_token,
+                            error_type="LeaseAttemptsExhausted",
+                            error_message=(
+                                "Worker lease expired after the job consumed its maximum execution attempts"
+                            ),
+                            stack_hash="",
+                            retryable=False,
+                        )
+                        exhausted += 1
+                    except StaleLease:
+                        # A heartbeat/completion won the race after the
+                        # read-only candidate scan. Its new owner decides.
+                        logger.debug(
+                            "[sweeper] Exhausted lease changed before terminalization",
+                            job_id=candidate.job_id,
+                        )
+                reclaimed = await repo.sweep_leases(
+                    conn,
+                    limit=cfg.batch_size,
+                    stale_worker_grace_s=stale_after_s,
+                )
                 expired_ids = await repo.sweep_waits(conn, limit=cfg.batch_size)
                 # One `wait_timed_out` ledger row per released job so the timeout is
                 # observable in the timeline, not just inferred from the state flip.
@@ -157,25 +189,25 @@ class Sweeper(PeriodicLoop):
                 # worker (no clean Claim-stream close) leaves a stale `workers` row;
                 # this marks it so the fleet view shows it dead before its leases are
                 # reclaimed. Threshold = missed heartbeats * heartbeat interval.
-                stale_after_s = cfg.worker_stale_after_heartbeats * cfg.worker_heartbeat_interval_s
                 stale_workers = await repo.mark_workers_stale(conn, stale_after_s=stale_after_s)
                 await self._refresh_gauges(conn)
             finally:
                 await repo.unlock_sweeper(conn)
         expired = len(expired_ids)
-        if reclaimed:
-            metrics.lease_reclaims_total.inc(reclaimed)
+        if reclaimed or exhausted:
+            metrics.lease_reclaims_total.inc(reclaimed + exhausted)
         if expired:
             metrics.wait_timeouts_total.inc(expired)
-        if reclaimed or expired or drift or stale_workers:
+        if reclaimed or exhausted or expired or drift or stale_workers:
             logger.info(
                 "[sweeper] Pass done",
                 reclaimed=reclaimed,
+                lease_attempts_exhausted=exhausted,
                 wait_expired=expired,
                 drift_healed=drift,
                 workers_marked_stale=stale_workers,
             )
-        return reclaimed + expired
+        return reclaimed + exhausted + expired
 
     async def _refresh_gauges(self, conn: Any) -> None:
         """Repopulate the point-in-time /metrics gauges.

@@ -22,7 +22,11 @@
 --   $6 int        offset (page start)
 --   $7 text|null  claimed_by filter (worker_id) — backs the per-worker fleet drill-in
 --   $8 text|null  parent_gate_id filter — backs Gate.status() child aggregation
-SELECT id, tenant, task_name, final_state AS state, attempt, priority,
+--   $9 text|null  pipeline filter
+--   $10 text|null stage filter
+--   $11 text|null group_key filter
+--   $12 timestamptz|null created-after filter
+SELECT id, tenant, task_name, pipeline, stage, final_state AS state, attempt, priority,
        group_key, ctx_id, wait_key, claimed_by, created_at, started_at, finished_at,
        error_history
 FROM jobs_all
@@ -32,5 +36,9 @@ WHERE tenant = $1
   AND ($4::text IS NULL OR ctx_id = $4)
   AND ($7::text IS NULL OR claimed_by = $7)
   AND ($8::text IS NULL OR parent_gate_id = $8::uuid)
+  AND ($9::text IS NULL OR pipeline = $9)
+  AND ($10::text IS NULL OR stage = $10)
+  AND ($11::text IS NULL OR group_key = $11)
+  AND ($12::timestamptz IS NULL OR created_at > $12)
 ORDER BY created_at DESC
 LIMIT $5 OFFSET $6;

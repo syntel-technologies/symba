@@ -896,76 +896,6 @@ wheels = [
 ]
 
 [[package]]
-name = "symba"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "asyncpg" },
-    { name = "croniter" },
-    { name = "fastapi" },
-    { name = "grpcio" },
-    { name = "grpcio-health-checking" },
-    { name = "grpcio-reflection" },
-    { name = "opentelemetry-exporter-otlp" },
-    { name = "opentelemetry-sdk" },
-    { name = "orjson" },
-    { name = "prometheus-client" },
-    { name = "protobuf" },
-    { name = "pydantic" },
-    { name = "pydantic-settings" },
-    { name = "pyjwt" },
-    { name = "redis" },
-    { name = "structlog" },
-    { name = "tenacity" },
-    { name = "uvicorn" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "grpcio-tools" },
-    { name = "httpx" },
-    { name = "hypothesis" },
-    { name = "pyright" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-    { name = "testcontainers" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "asyncpg", specifier = "==0.31.0" },
-    { name = "croniter", specifier = "==6.2.4" },
-    { name = "fastapi", specifier = "==0.139.0" },
-    { name = "grpcio", specifier = "==1.82.1" },
-    { name = "grpcio-health-checking", specifier = "==1.82.1" },
-    { name = "grpcio-reflection", specifier = "==1.82.1" },
-    { name = "grpcio-tools", marker = "extra == 'dev'", specifier = "==1.82.1" },
-    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28,<1.0" },
-    { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.156,<7.0" },
-    { name = "opentelemetry-exporter-otlp", specifier = "==1.43.0" },
-    { name = "opentelemetry-sdk", specifier = "==1.43.0" },
-    { name = "orjson", specifier = "==3.11.9" },
-    { name = "prometheus-client", specifier = "==0.25.0" },
-    { name = "protobuf", specifier = ">=7.35.1,<8.0" },
-    { name = "pydantic", specifier = "==2.13.4" },
-    { name = "pydantic-settings", specifier = "==2.14.2" },
-    { name = "pyjwt", specifier = "==2.13.0" },
-    { name = "pyright", marker = "extra == 'dev'", specifier = "==1.1.411" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0,<10.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.4,<2.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6.0,<8.0" },
-    { name = "redis", specifier = "==8.0.1" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.21" },
-    { name = "structlog", specifier = "==26.1.0" },
-    { name = "tenacity", specifier = "==9.1.4" },
-    { name = "testcontainers", marker = "extra == 'dev'", specifier = ">=4.14,<5.0" },
-    { name = "uvicorn", specifier = "==0.51.0" },
-]
-provides-extras = ["dev"]
-
-[[package]]
 name = "six"
 version = "1.17.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1003,6 +933,84 @@ sdist = { url = "https://files.pythonhosted.org/packages/5e/89/b4a0bcfdf4f71a3de
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a9/18/489c97b834dfff9cf2fc2507cede4bcd4b11e67f84bc462acd1992496f86/structlog-26.1.0-py3-none-any.whl", hash = "sha256:e081a26d6c373e6d201eca24eede26d8ffab07f88f477822e679183428d3d91e", size = 73764, upload-time = "2026-06-06T07:33:38.046Z" },
 ]
+
+[[package]]
+name = "symba"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "asyncpg" },
+    { name = "croniter" },
+    { name = "fastapi" },
+    { name = "grpcio" },
+    { name = "grpcio-health-checking" },
+    { name = "grpcio-reflection" },
+    { name = "opentelemetry-exporter-otlp" },
+    { name = "opentelemetry-sdk" },
+    { name = "orjson" },
+    { name = "prometheus-client" },
+    { name = "protobuf" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "pyjwt" },
+    { name = "redis" },
+    { name = "structlog" },
+    { name = "tenacity" },
+    { name = "uvicorn" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "grpcio-tools" },
+    { name = "httpx" },
+    { name = "hypothesis" },
+    { name = "pyright" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+    { name = "testcontainers" },
+]
+
+[package.dev-dependencies]
+codegen = [
+    { name = "grpcio-tools" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "asyncpg", specifier = "==0.31.0" },
+    { name = "croniter", specifier = "==6.2.4" },
+    { name = "fastapi", specifier = "==0.139.0" },
+    { name = "grpcio", specifier = "==1.82.1" },
+    { name = "grpcio-health-checking", specifier = "==1.82.1" },
+    { name = "grpcio-reflection", specifier = "==1.82.1" },
+    { name = "grpcio-tools", marker = "extra == 'dev'", specifier = "==1.82.1" },
+    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28,<1.0" },
+    { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.156,<7.0" },
+    { name = "opentelemetry-exporter-otlp", specifier = "==1.43.0" },
+    { name = "opentelemetry-sdk", specifier = "==1.43.0" },
+    { name = "orjson", specifier = "==3.11.9" },
+    { name = "prometheus-client", specifier = "==0.25.0" },
+    { name = "protobuf", specifier = ">=7.35.1,<8.0" },
+    { name = "pydantic", specifier = "==2.13.4" },
+    { name = "pydantic-settings", specifier = "==2.14.2" },
+    { name = "pyjwt", specifier = "==2.13.0" },
+    { name = "pyright", marker = "extra == 'dev'", specifier = "==1.1.411" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0,<10.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.4,<2.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6.0,<8.0" },
+    { name = "redis", specifier = "==8.0.1" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.21" },
+    { name = "structlog", specifier = "==26.1.0" },
+    { name = "tenacity", specifier = "==9.1.4" },
+    { name = "testcontainers", marker = "extra == 'dev'", specifier = ">=4.14,<5.0" },
+    { name = "uvicorn", specifier = "==0.51.0" },
+]
+provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+codegen = [{ name = "grpcio-tools", specifier = "==1.82.1" }]
 
 [[package]]
 name = "tenacity"

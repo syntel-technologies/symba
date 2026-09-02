@@ -55,6 +55,11 @@ class WorkerConn:
 class WorkerRegistry:
     def __init__(self, on_upsert: UpsertHook | None = None, on_delete: DeleteHook | None = None) -> None:
         self._workers: dict[str, WorkerConn] = {}
+        # A Claim stream may reconnect while jobs are still executing, so its
+        # first free_slots value is not necessarily the worker's total capacity.
+        # Retain the high-water mark across stream churn as a compatibility
+        # fallback for SDKs that do not send the reserved total-slots label.
+        self._known_slots_total: dict[str, int] = {}
         self._lock = asyncio.Lock()
         # Set by the matcher-adjacent code to short-circuit the dispatcher sleep
         # when slots free up (wake source; optimization, not correctness).
@@ -67,27 +72,51 @@ class WorkerRegistry:
 
     async def register(self, conn: WorkerConn) -> None:
         async with self._lock:
+            conn.slots_total = max(
+                conn.slots_total,
+                conn.free_slots,
+                self._known_slots_total.get(conn.worker_id, 0),
+            )
+            self._known_slots_total[conn.worker_id] = conn.slots_total
             self._workers[conn.worker_id] = conn
         self.wake.set()
         await self._persist_upsert(conn)
 
-    async def unregister(self, worker_id: str) -> None:
+    async def unregister(
+        self,
+        worker_id: str,
+        *,
+        expected: WorkerConn | None = None,
+    ) -> bool:
+        """Remove one worker connection without deleting a newer generation."""
         async with self._lock:
-            self._workers.pop(worker_id, None)
+            current = self._workers.get(worker_id)
+            if current is None or (expected is not None and current is not expected):
+                return False
+            self._workers.pop(worker_id)
         if self._on_delete is not None:
             await self._on_delete(worker_id)
+        return True
 
-    async def update_slots(self, worker_id: str, free_slots: int, tags: frozenset[str] | None = None) -> None:
+    async def update_slots(
+        self,
+        worker_id: str,
+        free_slots: int,
+        tags: frozenset[str] | None = None,
+        *,
+        expected: WorkerConn | None = None,
+    ) -> bool:
         async with self._lock:
             conn = self._workers.get(worker_id)
-            if conn is None:
-                return
+            if conn is None or (expected is not None and conn is not expected):
+                return False
             was_idle = conn.free_slots == 0
             conn.free_slots = free_slots
             # A worker may advertise more capacity than at connect (config reload);
             # slots_total is the high-water mark so slots_busy never goes negative.
             if free_slots > conn.slots_total:
                 conn.slots_total = free_slots
+                self._known_slots_total[worker_id] = conn.slots_total
             if tags is not None:
                 conn.tags = tags
             snapshot = conn
@@ -96,6 +125,7 @@ class WorkerRegistry:
         # Slot frames double as heartbeats: refresh the read model so last_seen
         # tracks liveness and the busy/total gauge stays live.
         await self._persist_upsert(snapshot)
+        return True
 
     async def _persist_upsert(self, conn: WorkerConn) -> None:
         if self._on_upsert is None:

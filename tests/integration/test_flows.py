@@ -155,16 +155,13 @@ async def test_inline_upstream_delivers_chain_predecessor(db: asyncpg.Connection
     job_id = await h.seed(db, h.spec(task_name="parse.parse_document"))
     ctx_id = str(uuid.uuid4())
     await db.execute(
-        "UPDATE jobs SET on_success='parse.complete_stage', ctx_id=$2, "
-        "pipeline='ingestion', stage='parse' WHERE id=$1",
+        "UPDATE jobs SET on_success='parse.complete_stage', ctx_id=$2, pipeline='ingestion', stage='parse' WHERE id=$1",
         job_id,
         ctx_id,
     )
 
     c1 = await h.claim_one(db)
-    await svc.complete(
-        job_id=c1.id, lease_token=c1.lease_token, result={"output_ref": "parsed/doc.json"}
-    )
+    await svc.complete(job_id=c1.id, lease_token=c1.lease_token, result={"output_ref": "parsed/doc.json"})
 
     registry = WorkerRegistry()
     conn = WorkerConn(worker_id="w-inline", tags=frozenset(), free_slots=2, labels={})
@@ -545,9 +542,7 @@ async def test_cancel_terminal_is_noop(db: asyncpg.Connection, pools: Pools) -> 
 
 
 @pytest.mark.parametrize("state", ["submitted", "queued", "waiting"])
-async def test_cancel_nonrunning_states_archive_cancelled(
-    db: asyncpg.Connection, pools: Pools, state: str
-) -> None:
+async def test_cancel_nonrunning_states_archive_cancelled(db: asyncpg.Connection, pools: Pools, state: str) -> None:
     """submitted/queued/waiting all take the immediate-archive path."""
     svc = CancelService(pools, h.registry())
     job_id = await h.seed(db, h.spec(state=state))
@@ -571,9 +566,7 @@ async def test_cancel_future_run_at_needs_no_special_path(db: asyncpg.Connection
 
 
 @pytest.mark.parametrize("final_state", ["succeeded", "dead"])
-async def test_cancel_already_terminal_is_noop(
-    db: asyncpg.Connection, pools: Pools, final_state: str
-) -> None:
+async def test_cancel_already_terminal_is_noop(db: asyncpg.Connection, pools: Pools, final_state: str) -> None:
     """A job already archived as succeeded/dead is an idempotent no-op — cancel must
     NOT resurrect it or error."""
     svc = CancelService(pools, h.registry())

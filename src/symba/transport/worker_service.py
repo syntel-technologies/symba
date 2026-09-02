@@ -18,6 +18,7 @@ errors to gRPC status codes.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from collections.abc import AsyncIterator
 
@@ -36,6 +37,16 @@ from symba.v1 import data_plane_pb2_grpc as dp_grpc
 logger = logger.bind(service="worker_service", context="engine/transport")
 
 _GRPC_CODES = {name: getattr(grpc.StatusCode, name) for name in dir(grpc.StatusCode) if name.isupper()}
+_SLOTS_TOTAL_LABEL = "symba.slots_total"
+
+
+def _slots_total(first: dp.ClaimRequest) -> int:
+    """Read stable capacity from the reserved label with legacy fallback."""
+    try:
+        advertised = int(first.labels.get(_SLOTS_TOTAL_LABEL, "0"))
+    except (TypeError, ValueError):
+        advertised = 0
+    return max(int(first.free_slots), advertised)
 
 
 async def _abort(context: grpc.aio.ServicerContext, err: SymbaError) -> None:
@@ -82,33 +93,58 @@ class WorkerServicer(dp_grpc.WorkerServiceServicer):
             tags=frozenset(first.tags),
             free_slots=first.free_slots,
             labels=dict(first.labels),
-            # At connect nothing is assigned yet, so advertised free_slots is the
-            # worker's total capacity; slots_busy is derived from it as slots decrease.
-            slots_total=first.free_slots,
+            # Reconnects can occur while jobs are still executing, so free_slots
+            # is not a stable capacity value. New SDKs send the configured total
+            # in a reserved label; old SDKs fall back to the registry high-water.
+            slots_total=_slots_total(first),
         )
         await self._registry.register(conn)
         logger.info("[Claim] Worker connected", worker_id=conn.worker_id, tags=sorted(conn.tags), slots=conn.free_slots)
 
-        reader = asyncio.create_task(self._read_slots(conn.worker_id, request_iterator))
+        reader = asyncio.create_task(self._read_slots(conn, request_iterator))
+        assignment_task: asyncio.Task[dp.JobAssignment] | None = None
         try:
             while True:
-                assignment = await conn.queue.get()
+                assignment_task = asyncio.create_task(conn.queue.get())
+                done, _ = await asyncio.wait(
+                    {assignment_task, reader},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if reader in done:
+                    break
+                assignment = assignment_task.result()
+                assignment_task = None
                 yield assignment
         except asyncio.CancelledError:
             raise
         finally:
+            if assignment_task is not None:
+                assignment_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await assignment_task
             reader.cancel()
-            await self._registry.unregister(conn.worker_id)
-            logger.info("[Claim] Worker disconnected", worker_id=conn.worker_id)
+            with contextlib.suppress(asyncio.CancelledError):
+                await reader
+            removed = await self._registry.unregister(conn.worker_id, expected=conn)
+            logger.info(
+                "[Claim] Worker disconnected",
+                worker_id=conn.worker_id,
+                superseded=not removed,
+            )
 
-    async def _read_slots(self, worker_id: str, request_iterator: AsyncIterator[dp.ClaimRequest]) -> None:
+    async def _read_slots(self, conn: WorkerConn, request_iterator: AsyncIterator[dp.ClaimRequest]) -> None:
         try:
             async for frame in request_iterator:
-                await self._registry.update_slots(worker_id, frame.free_slots, frozenset(frame.tags))
+                await self._registry.update_slots(
+                    conn.worker_id,
+                    frame.free_slots,
+                    frozenset(frame.tags),
+                    expected=conn,
+                )
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.debug("[Claim] Slot reader ended", worker_id=worker_id, exc_info=True)
+            logger.debug("[Claim] Slot reader ended", worker_id=conn.worker_id, exc_info=True)
 
     async def Heartbeat(self, request: dp.HeartbeatRequest, context: grpc.aio.ServicerContext) -> dp.HeartbeatResponse:
         try:
