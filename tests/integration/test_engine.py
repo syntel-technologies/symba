@@ -16,11 +16,12 @@ from __future__ import annotations
 import asyncpg
 import pytest
 
-from symba.config import load_config
+from symba.config import RedisConfig, load_config
 from symba.db.pool import Pools
 from symba.services.job_service import JobService
 from symba.services.loops import Sweeper
 from symba.services.matcher import Matcher
+from symba.services.rate_limiter import RateLimiter
 from symba.services.registry import WorkerConn, WorkerRegistry
 from symba.transport.state import EngineState
 from tests.integration import _helpers as h
@@ -140,8 +141,9 @@ async def test_service_complete_stale_lease_raises(db: asyncpg.Connection, pools
 
 
 async def test_service_fail_retries_when_attempts_remain(db: asyncpg.Connection, pools: Pools) -> None:
-    job_id = await h.seed(db, h.spec())  # max_attempts default 5
+    job_id = await h.seed(db, h.spec(group_key="g", cap=1))  # max_attempts default 5
     claimed = await h.claim_one(db)  # attempt -> 1
+    assert await h.group_running(db, "default", "g", "t.echo") == 1
 
     svc = JobService(pools, load_config())
     outcome = await svc.fail(
@@ -155,6 +157,51 @@ async def test_service_fail_retries_when_attempts_remain(db: asyncpg.Connection,
     assert outcome.will_retry is True
     row = await db.fetchrow("SELECT state, lease_token FROM jobs WHERE id = $1", job_id)
     assert row is not None and row["state"] == "queued" and row["lease_token"] is None
+    assert await h.group_running(db, "default", "g", "t.echo") == 0
+
+
+async def test_service_fail_sanitizes_history_and_drains_rate_class(
+    db: asyncpg.Connection,
+    pools: Pools,
+) -> None:
+    limiter = RateLimiter(RedisConfig(url=""), pools)
+    await limiter.upsert(name="llm", capacity=4, refill_per_s=0.0)
+    assert await limiter.reserve("llm", 1) == 1
+    job_id = await h.seed(db, h.spec(rate_class="llm"))
+    claimed = await h.claim_one(db)
+
+    svc = JobService(pools, load_config(), rate_limiter=limiter)
+    outcome = await svc.fail(
+        job_id=job_id,
+        lease_token=claimed.lease_token,
+        error_type="RateLimitError",
+        error_message="raw provider body with sk-secret-material",
+        stack_hash="abc123",
+        retryable=True,
+        error_message_safe=False,
+        error_metadata={
+            "status_code": 429,
+            "request_id": "req-123",
+            "body": {"private": "must-not-survive"},
+        },
+        rate_limited=True,
+        retry_after_s=30,
+    )
+
+    assert outcome.will_retry is True
+    row = await db.fetchrow("SELECT run_at, error_history FROM jobs WHERE id=$1", job_id)
+    assert row is not None
+    entry = row["error_history"][-1]
+    assert entry["message"] == "Worker task failed"
+    assert entry["metadata"] == {
+        "status_code": 429,
+        "request_id": "req-123",
+        "retry_after_s": 30.0,
+    }
+    assert "secret-material" not in str(entry)
+    assert "must-not-survive" not in str(entry)
+    assert await db.fetchval("SELECT tokens FROM rate_classes WHERE name='llm'") == 0
+    assert await db.fetchval("SELECT run_at > now() + interval '20 seconds' FROM jobs WHERE id=$1", job_id)
 
 
 async def test_service_fail_dies_when_not_retryable(db: asyncpg.Connection, pools: Pools) -> None:

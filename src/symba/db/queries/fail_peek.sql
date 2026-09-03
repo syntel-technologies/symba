@@ -8,7 +8,7 @@
 --
 -- Parameters: $1 uuid job_id, $2 text lease_token
 -- Returns 0 rows on stale lease / not running (service raises StaleLease).
-SELECT attempt, max_attempts, backoff
+SELECT attempt, max_attempts, backoff, rate_class
 FROM jobs
 WHERE id = $1 AND lease_token = $2 AND state = 'running'
 FOR UPDATE;

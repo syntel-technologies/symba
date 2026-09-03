@@ -95,7 +95,7 @@ class EngineState:
             config=config,
             pools=pools,
             registry=registry,
-            jobs=JobService(pools, config, registry),
+            jobs=JobService(pools, config, registry, rate_limiter),
             submit=SubmitService(pools, registry, config),
             fanout=FanOutService(pools, registry, config),
             cancel=CancelService(pools, registry),

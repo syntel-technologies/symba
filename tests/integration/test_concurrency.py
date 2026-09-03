@@ -5,6 +5,8 @@ These are the "the queue must not lie under pressure" tests, so a regression is
 obvious:
 
     test_claim_respects_group_ceiling             — one batch, cap holds
+    test_claim_uses_exact_remaining_group_capacity — high-limit cap=4 claim
+    test_concurrent_group_claims_hold_exact_cap    — racing cap=4 claimers
     test_concurrent_claims_never_double_assign    — 8 racing claimers, SKIP LOCKED
     archive-move atomicity                         — a rolled-back Complete leaves the
                                                     job fully LIVE, never lost from
@@ -42,8 +44,8 @@ pytestmark = [pytest.mark.l2, pytest.mark.asyncio(loop_scope="session")]
 async def test_claim_respects_group_ceiling(db: asyncpg.Connection) -> None:
     # Three cap=1 jobs: two in cust-1, one in cust-2. A single claim with
     # headroom (limit=10) must take exactly one per group -> {cust-1, cust-2},
-    # the second cust-1 job held back. per_group_cap=1 gives the in-batch cap-1
-    # exactness the matcher would pass.
+    # the second cust-1 job held back. The independent per_group_cap=1 fairness
+    # setting matches the same ceiling here but is not relied on by the cap=4 pins.
     await h.seed(db, h.spec(task_name="webhook", group_key="cust-1", cap=1))
     await h.seed(db, h.spec(task_name="webhook", group_key="cust-1", cap=1))
     await h.seed(db, h.spec(task_name="webhook", group_key="cust-2", cap=1))
@@ -54,6 +56,44 @@ async def test_claim_respects_group_ceiling(db: asyncpg.Connection) -> None:
 
     assert {j.group_key for j in claimed} == {"cust-1", "cust-2"}
     assert len(claimed) == 2  # second cust-1 job held back
+
+
+async def test_claim_uses_exact_remaining_group_capacity(db: asyncpg.Connection) -> None:
+    ids_by_priority: dict[int, str] = {}
+    for priority in range(20):
+        ids_by_priority[priority] = await h.seed(
+            db,
+            h.spec(task_name="provider.call", group_key="provider", cap=4, priority=priority),
+        )
+
+    initial = await repo.claim(
+        db,
+        worker_tags=[],
+        exhausted_rate_classes=[],
+        limit=2,
+        claimed_by="initial-worker",
+        per_group_cap=1000,
+    )
+    assert {job.id for job in initial} == {ids_by_priority[p] for p in (18, 19)}
+
+    claimed = await repo.claim(
+        db,
+        worker_tags=[],
+        exhausted_rate_classes=[],
+        limit=50,
+        claimed_by="wide-worker",
+        per_group_cap=1000,
+    )
+
+    assert len(claimed) == 2
+    assert {job.id for job in claimed} == {ids_by_priority[p] for p in (16, 17)}
+    assert await h.group_running(db, "default", "provider", "provider.call") == 4
+    assert await db.fetchval(
+        "SELECT count(*) FROM jobs WHERE state='running' AND group_key='provider'"
+    ) == 4
+    assert await db.fetchval(
+        "SELECT count(*) FROM jobs WHERE state='queued' AND group_key='provider'"
+    ) == 16
 
 
 # --------------------------------------------------------------------------- #
@@ -87,6 +127,52 @@ async def test_concurrent_claims_never_double_assign(migrated_pool: asyncpg.Pool
     ids = [jid for batch in results for jid in batch]
     assert len(ids) == len(set(ids)), "SKIP LOCKED must prevent any double-assignment"
     assert len(ids) == 200, "every queued job should be claimed exactly once"
+
+
+async def test_concurrent_group_claims_hold_exact_cap(migrated_pool: asyncpg.Pool) -> None:
+    async with migrated_pool.acquire() as seeder:
+        await seeder.execute(
+            "TRUNCATE jobs, jobs_archive, job_events, job_dependencies, gates, "
+            "group_running, checkpoints, signals, workers RESTART IDENTITY CASCADE"
+        )
+        for priority in range(64):
+            await h.seed(
+                seeder,
+                h.spec(task_name="provider.call", group_key="provider", cap=4, priority=priority),
+            )
+        # Start with the durable counter already present so the race specifically
+        # proves row-lock serialization, independent of first-claim initialization.
+        await seeder.execute(
+            "INSERT INTO group_running (tenant, group_key, task_name, running) "
+            "VALUES ('default', 'provider', 'provider.call', 0)"
+        )
+
+    async def run_claim(worker: str) -> list[str]:
+        async with migrated_pool.acquire() as conn, conn.transaction():
+            claimed = await repo.claim(
+                conn,
+                worker_tags=[],
+                exhausted_rate_classes=[],
+                limit=50,
+                claimed_by=worker,
+                per_group_cap=1000,
+            )
+        return [job.id for job in claimed]
+
+    results = await asyncio.gather(*[run_claim(f"group-worker-{i}") for i in range(8)])
+    ids = [job_id for batch in results for job_id in batch]
+
+    assert len(ids) == len(set(ids)) == 4
+    async with migrated_pool.acquire() as verifier:
+        assert await h.group_running(verifier, "default", "provider", "provider.call") == 4
+        assert await verifier.fetchval(
+            "SELECT count(*) FROM jobs WHERE state='running' "
+            "AND group_key='provider' AND task_name='provider.call'"
+        ) == 4
+        assert await verifier.fetchval(
+            "SELECT count(*) FROM jobs WHERE state='queued' "
+            "AND group_key='provider' AND task_name='provider.call'"
+        ) == 60
 
 
 # --------------------------------------------------------------------------- #

@@ -115,9 +115,10 @@ class TerminalRow:
     on_failure: dict[str, Any] | None = None
     parent_gate_id: str | None = None
     prior_state: str | None = None
-    # Inherited by a chain continuation so the next link
-    # stays in the same pipeline lineage and routing lane. Defaulted so cancel/fail
-    # callers that don't SELECT them still construct a valid row.
+    # Used while materializing a chain continuation. Lineage and worker routing
+    # carry forward; rate_class is retained here for terminal observability but is
+    # deliberately not copied to the implicit continuation. Defaulted so
+    # cancel/fail callers that don't SELECT these still construct a valid row.
     pipeline: str | None = None
     stage: str | None = None
     priority: int = 0

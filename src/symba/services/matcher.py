@@ -13,9 +13,10 @@
        an equal priority band, then assign to workers round-robin.
     5. push JobAssignments onto worker queues; decrement local free_slots.
 
-Per-group exactness for max_concurrent_per_group=1 is enforced two ways: the SQL
-fairness cap ($5 = per_group_cap) bounds rows-per-group in a batch, and the claim
-runs in its own transaction so group_running is authoritative across batches.
+Per-group exactness for every positive max_concurrent_per_group is enforced in
+the claim SQL: concurrent claimers serialize on the group's counter row and each
+batch is bounded by (cap - running). The independent $5 per_group_cap only shapes
+fairness so one uncapped or high-cap group cannot monopolize a dispatch batch.
 """
 
 from __future__ import annotations

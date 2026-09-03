@@ -80,6 +80,16 @@ message FailRequest {
   // know it), so the worker reports it here and the engine honors it over the
   // job's stored default. 0 = unset -> engine keeps the stored max_attempts.
   uint32 max_attempts = 7;
+  // Safe, allow-listed diagnostics produced by the SDK. Arbitrary exception
+  // strings and provider response bodies must never cross this boundary.
+  bytes error_metadata_json = 8;
+  // True only when error_message was produced by the SDK's safe serializer.
+  // False for legacy workers, whose arbitrary message is discarded server-side.
+  bool error_message_safe = 9;
+  // Typed downstream rate-limit feedback. The engine validates the job's stored
+  // rate_class before draining its shared bucket; workers cannot name a bucket.
+  bool rate_limited = 10;
+  double retry_after_s = 11;
 }
 message FailResponse { bool accepted = 1; bool will_retry = 2; }
 

@@ -163,6 +163,7 @@ class Sweeper(PeriodicLoop):
                             error_message=(
                                 "Worker lease expired after the job consumed its maximum execution attempts"
                             ),
+                            error_message_safe=True,
                             stack_hash="",
                             retryable=False,
                         )

@@ -35,7 +35,7 @@ from collections.abc import AsyncIterator
 import asyncpg
 import pytest
 import pytest_asyncio
-from hypothesis import HealthCheck, given, settings
+from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
 from symba.config import load_config
@@ -245,7 +245,7 @@ _steps = st.sampled_from(["claim", "complete", "fail"])
 @st.composite
 def _kill_schedule(draw: st.DrawFn) -> tuple[int, int, list[str], int]:
     n_jobs = draw(st.integers(min_value=3, max_value=8))
-    cap = draw(st.integers(min_value=1, max_value=3))
+    cap = draw(st.integers(min_value=1, max_value=4))
     steps = draw(st.lists(_steps, min_size=1, max_size=12))
     # The drift a kill leaves: a lost ±1..2 on the counter (increment or decrement).
     drift = draw(st.integers(min_value=-2, max_value=2))
@@ -253,6 +253,7 @@ def _kill_schedule(draw: st.DrawFn) -> tuple[int, int, list[str], int]:
 
 
 @settings(max_examples=30, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@example(sched=(8, 4, ["claim", "claim"], 0))
 @given(sched=_kill_schedule())
 @pytest.mark.asyncio(loop_scope="session")
 async def test_gap2_group_running_reconciles_after_kill(
@@ -271,28 +272,18 @@ async def test_gap2_group_running_reconciles_after_kill(
         running: list[tuple[str, str]] = []  # (job_id, lease_token) currently running
         for step in steps:
             if step == "claim":
-                # The matcher passes per_group_cap = remaining headroom (cap - committed
-                # running), NOT a static cap — that headroom computation is what keeps a
-                # group at or under its ceiling across batches. We reproduce
-                # it here so the drive is faithful to how the engine actually claims.
-                committed = (
-                    await db.fetchval(
-                        "SELECT running FROM group_running "
-                        "WHERE tenant='default' AND group_key='g1' AND task_name='capped'"
-                    )
-                    or 0
-                )
-                headroom = max(0, cap - committed)
+                # A deliberately huge fairness cap proves that the durable group
+                # ceiling itself consumes only (cap - running) across every batch.
                 got = await repo.claim(
                     db,
                     worker_tags=[],
                     exhausted_rate_classes=[],
                     limit=10,
                     claimed_by="w",
-                    per_group_cap=max(1, headroom),
+                    per_group_cap=1000,
                 )
                 running.extend((j.id, j.lease_token) for j in got)
-                # With matcher headroom, a claim never pushes the group over cap.
+                # The repository boundary itself never pushes the group over cap.
                 assert len(running) <= cap, f"running {len(running)} > cap {cap} after claim"
             elif step == "complete" and running:
                 jid, tok = running.pop()

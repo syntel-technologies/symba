@@ -181,6 +181,10 @@ class WorkerServicer(dp_grpc.WorkerServiceServicer):
                 stack_hash=request.stack_hash,
                 retryable=request.retryable,
                 worker_max_attempts=request.max_attempts or None,
+                error_message_safe=request.error_message_safe,
+                error_metadata=_decode_error_metadata(request.error_metadata_json),
+                rate_limited=request.rate_limited,
+                retry_after_s=request.retry_after_s or None,
             )
         except SymbaError as err:
             await _abort(context, err)
@@ -238,3 +242,15 @@ def _decode_json(raw: bytes) -> dict[str, object] | None:
     if not raw:
         return None
     return json.loads(raw.decode())
+
+
+def _decode_error_metadata(raw: bytes) -> dict[str, object]:
+    """Decode the SDK's safe envelope; malformed metadata fails closed."""
+
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw.decode())
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}

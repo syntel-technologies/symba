@@ -21,6 +21,7 @@ class Queries:
     """Loaded SQL, accessed as Q.CLAIM etc. Missing files fail loudly at import."""
 
     CLAIM = _load("claim")
+    PREPARE_GROUP_COUNTERS = _load("prepare_group_counters")
     RUNNING_COUNTS_BY_WORKER = _load("running_counts_by_worker")
     SET_CLAIMED_BY = _load("set_claimed_by")
     SUBMIT = _load("submit")

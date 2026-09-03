@@ -16,7 +16,8 @@ services, transports decode/encode only).
     fail — one tx, retry-or-die
     --------------------------------------
     1. fail_peek           FOR UPDATE read of attempt/max_attempts/backoff
-    2. should_retry?  yes  -> fail_retry (RUNNING -> QUEUED with backoff run_at)
+    2. should_retry?  yes  -> fail_retry + decrement_group
+                              (RUNNING -> QUEUED with backoff run_at)
                        no   -> fail_die + decrement_group  (RUNNING -> DEAD)
     3. record_event
 """
@@ -26,11 +27,12 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from symba.config import SymbaConfig
 from symba.core import chain
 from symba.core.errors import ResultTooLarge, StaleLease
+from symba.core.failure import build_error_entry, normalize_retry_after
 from symba.core.retry import BackoffPolicy, should_retry
 from symba.core.states import JobState
 from symba.db import repository as repo
@@ -40,6 +42,9 @@ from symba.observability import metrics
 from symba.observability.logging import logger
 from symba.observability.tracing import engine_span
 from symba.services.registry import WorkerRegistry
+
+if TYPE_CHECKING:
+    from symba.services.rate_limiter import RateLimiter
 
 logger = logger.bind(service="job_service", context="engine/services")
 
@@ -51,13 +56,20 @@ class FailOutcome:
 
 
 class JobService:
-    def __init__(self, pools: Pools, config: SymbaConfig, registry: WorkerRegistry | None = None) -> None:
+    def __init__(
+        self,
+        pools: Pools,
+        config: SymbaConfig,
+        registry: WorkerRegistry | None = None,
+        rate_limiter: RateLimiter | None = None,
+    ) -> None:
         self._pools = pools
         self._max_result_bytes = config.limits.max_result_kb * 1024
         # Optional: when present, a completed job that flips dependents to 'queued'
         # wakes the dispatcher this tick instead of waiting out the idle-decay
         # timer. None in unit/L2 setups that don't dispatch.
         self._registry = registry
+        self._rate_limiter = rate_limiter
 
     async def complete(
         self,
@@ -82,7 +94,7 @@ class JobService:
         # continuation exists together, or neither does).
         continuation_id: str | None = None
         flipped_dependents: list[str] = []
-        gate_fired = False
+        gate_resolved = False
         # `complete` span wraps the whole terminal tx; the engine-side terminal
         # of the per-job trace, joined app-side via ctx_id. No-op unless OTLP is set.
         # ctx_id is unknown until the move returns, so it is stamped inside the block;
@@ -117,17 +129,17 @@ class JobService:
                 await repo.record_event(conn, job_id=job_id, event="skipped" if skipped else "succeeded")
 
                 # Gate settle: a child of a fan-out gate bumps its barrier;
-                # the tx that crosses the policy threshold fires the continuation once.
+                # the tx that resolves the policy materializes one terminal branch.
                 # A ctx.skip() child is a NON-failure that does NOT count toward
                 # succeeded (spec 7.2): it settles the gate without advancing the
                 # success count, so an all-skipped gate still fires with succeeded=0.
-                gate_fired = await self._settle_gate(
+                gate_resolved = await self._settle_gate(
                     conn,
                     parent_gate_id=term.parent_gate_id,
                     child_succeeded=not skipped,
                     child_failed=False,
                 )
-        if (flipped_dependents or gate_fired or continuation_id) and self._registry is not None:
+        if (flipped_dependents or gate_resolved or continuation_id) and self._registry is not None:
             self._registry.wake.set()  # newly-claimable work exists
         metrics.jobs_total.labels(tenant=term.tenant, task=term.task_name, state="succeeded").inc()
         metrics.archive_moved_total.labels(final_state="succeeded").inc()
@@ -147,7 +159,7 @@ class JobService:
             continuation_id=continuation_id,
             chain_stopped=drop_chain_tail,
             dependents_ready=len(flipped_dependents),
-            gate_fired=gate_fired,
+            gate_resolved=gate_resolved,
         )
         return True
 
@@ -159,26 +171,42 @@ class JobService:
         child_succeeded: bool,
         child_failed: bool,
     ) -> bool:
-        """Bump the child's gate; materialize the continuation on fire.
+        """Bump the child's gate; materialize its terminal branch on resolution.
 
-        Returns True iff THIS child's completion fired the gate (claim-once), so the
-        caller knows to wake the dispatcher. Runs in the child's terminal tx.
+        Returns True iff THIS child resolved the gate (claim-once), so the caller
+        knows to wake the dispatcher. Runs in the child's terminal tx.
 
         Child outcome (spec 7.2): success -> (True, False); dead -> (False, True);
         skip -> (False, False). Only a DEAD child blocks all_success.
 
-        On fire, the aggregate manifest is merged into the continuation's payload
-        under the reserved ``__gate__`` key, preserving the caller's on_complete
-        payload. Downstream handlers read ``ctx.payload["__gate__"]`` for counts
-        and per-child ``results`` (SDK-fake shape: job_id/task/result).
+        On success, the aggregate manifest is merged into the continuation's
+        payload under the reserved ``__gate__`` key. If every child is terminal
+        but the policy is unsatisfied, the continuation's nested on_failure hook
+        is enqueued instead. Both branches are atomic with gate resolution.
         """
         if parent_gate_id is None:
             return False
-        fire = await repo.bump_gate(
+        resolution = await repo.bump_gate(
             conn, gate_id=parent_gate_id, child_succeeded=child_succeeded, child_failed=child_failed
         )
-        if fire is None or not fire.fired:
+        if resolution is None or not resolution.resolved:
             return False
+
+        if not resolution.satisfied:
+            failure = resolution.on_complete.get("on_failure")
+            if failure:
+                spec = SubmitSpec(
+                    **{
+                        **failure,
+                        "tenant": resolution.tenant,
+                        "ctx_id": resolution.ctx_id,
+                        "group_key": parent_gate_id,
+                        "state": JobState.QUEUED,
+                    }
+                )
+                await repo.submit(conn, spec)
+            return True
+
         # Per-child results for assemble/reduce handlers. Must run after the
         # firing child's archive move (caller ordering) so jobs_archive is complete.
         child_results = await repo.gate_child_results(conn, gate_id=parent_gate_id)
@@ -186,8 +214,20 @@ class JobService:
         # as a fresh QUEUED job in the SAME tx so the continuation is durable with
         # the fire and immediately claimable. remaining_deps=0: the gate WAS the
         # barrier, so the continuation has no further deps to satisfy.
-        oc = _merge_gate_manifest(fire.on_complete, gate_id=parent_gate_id, fire=fire, results=child_results)
-        spec = SubmitSpec(**{**oc, "tenant": fire.tenant, "ctx_id": fire.ctx_id, "state": JobState.QUEUED})
+        oc = _merge_gate_manifest(
+            resolution.on_complete,
+            gate_id=parent_gate_id,
+            resolution=resolution,
+            results=child_results,
+        )
+        spec = SubmitSpec(
+            **{
+                **oc,
+                "tenant": resolution.tenant,
+                "ctx_id": resolution.ctx_id,
+                "state": JobState.QUEUED,
+            }
+        )
         await repo.submit(conn, spec)
         return True
 
@@ -201,62 +241,116 @@ class JobService:
         stack_hash: str,
         retryable: bool,
         worker_max_attempts: int | None = None,
+        error_message_safe: bool = False,
+        error_metadata: dict[str, Any] | None = None,
+        rate_limited: bool = False,
+        retry_after_s: float | None = None,
     ) -> FailOutcome:
-        error_entry = _error_entry(error_type, error_message, stack_hash, retryable)
-        gate_fired = False
+        metadata = dict(error_metadata or {})
+        if retry_after_s is not None:
+            metadata["retry_after_s"] = retry_after_s
+        error_entry = build_error_entry(
+            error_type,
+            error_message,
+            stack_hash,
+            retryable,
+            message_safe=error_message_safe,
+            metadata=metadata,
+        )
+        safe_retry_after = normalize_retry_after(error_entry.get("metadata", {}).get("retry_after_s"))
+        gate_resolved = False
+        term: repo.TerminalRow | None = None
+        hook_id: str | None = None
+        rate_class: str | None = None
         async with self._pools.acquire_hot() as conn, conn.transaction():
             peek = await repo.fail_peek(conn, job_id=job_id, lease_token=lease_token)
             if peek is None:
                 raise StaleLease(job_id=job_id)
 
             attempt = peek["attempt"]
+            rate_class = peek["rate_class"]
             # The retry LIMIT is a worker-side task property (@task max_attempts) the
             # submitter may not know, so a worker-reported cap wins over the stored
             # default. None/0 -> fall back to the job's stored max_attempts.
             max_attempts = worker_max_attempts or peek["max_attempts"]
             will_retry = should_retry(attempt, max_attempts, retryable)
             if will_retry:
-                next_run_at = _next_run_at(attempt, peek["backoff"])
-                await repo.fail_retry(
+                next_run_at = _next_run_at(attempt, peek["backoff"], minimum_delay_s=safe_retry_after)
+                retry_row = await repo.fail_retry(
                     conn, job_id=job_id, lease_token=lease_token, next_run_at=next_run_at, error_entry=error_entry
+                )
+                if retry_row is None:
+                    raise StaleLease(job_id=job_id)
+                await repo.decrement_group(
+                    conn,
+                    tenant=retry_row["tenant"],
+                    group_key=retry_row["group_key"],
+                    task_name=retry_row["task_name"],
                 )
                 await repo.record_event(conn, job_id=job_id, event="retry_scheduled", detail=error_entry)
                 logger.info(
                     "[fail] Retry scheduled", job_id=job_id, attempt=attempt, next_run_at=next_run_at.isoformat()
                 )
-                return FailOutcome(accepted=True, will_retry=True)
-
-            term = await repo.fail_die(conn, job_id=job_id, lease_token=lease_token, error_entry=error_entry)
-            if term is None:  # lost the race between peek and die (extremely rare)
-                raise StaleLease(job_id=job_id)
-            await repo.decrement_group(conn, tenant=term.tenant, group_key=term.group_key, task_name=term.task_name)
-            # A dead child still settles its gate (counts toward all_terminal/quorum,
-            # never toward all_success); the gate fires once if the policy allows it.
-            gate_fired = await self._settle_gate(
-                conn, parent_gate_id=term.parent_gate_id, child_succeeded=False, child_failed=True
-            )
-
-            # on_failure hook: materialize the error handler as a fresh job
-            # in the SAME tx, so a death always leaves its recovery step enqueued.
-            hook_id: str | None = None
-            if term.on_failure:
-                hook_spec = SubmitSpec(
-                    **{**term.on_failure, "tenant": term.tenant, "ctx_id": term.ctx_id, "state": JobState.QUEUED}
+            else:
+                term = await repo.fail_die(conn, job_id=job_id, lease_token=lease_token, error_entry=error_entry)
+                if term is None:  # lost the race between peek and die (extremely rare)
+                    raise StaleLease(job_id=job_id)
+                await repo.decrement_group(
+                    conn,
+                    tenant=term.tenant,
+                    group_key=term.group_key,
+                    task_name=term.task_name,
                 )
-                hook_res = await repo.submit(conn, hook_spec)
-                hook_id = hook_res.job_id
-
-            # Cascade-cancel: a dead upstream can never satisfy its dependents,
-            # so archive the whole live dependent cone as 'cancelled' and audit each.
-            cancelled = await repo.cascade_cancel(conn, root_job_id=job_id)
-            for dep_id in cancelled:
-                await repo.record_event(
-                    conn, job_id=dep_id, event="dependency_cancelled", detail={"root_cause": job_id}
+                # A dead child still settles its gate (counts toward all_terminal/quorum,
+                # never toward all_success); the gate resolves once when the policy is
+                # satisfied or all children prove it unsatisfied.
+                gate_resolved = await self._settle_gate(
+                    conn, parent_gate_id=term.parent_gate_id, child_succeeded=False, child_failed=True
                 )
 
-            await repo.record_event(conn, job_id=job_id, event="dead", detail=error_entry)
+                # on_failure hook: materialize the error handler as a fresh job
+                # in the SAME tx, so a death always leaves its recovery step enqueued.
+                if term.on_failure:
+                    hook_spec = SubmitSpec(
+                        **{
+                            **term.on_failure,
+                            "tenant": term.tenant,
+                            "ctx_id": term.ctx_id,
+                            "state": JobState.QUEUED,
+                        }
+                    )
+                    hook_res = await repo.submit(conn, hook_spec)
+                    hook_id = hook_res.job_id
 
-        if (gate_fired or hook_id) and self._registry is not None:
+                # Cascade-cancel: a dead upstream can never satisfy its dependents,
+                # so archive the whole live dependent cone as 'cancelled' and audit each.
+                cancelled = await repo.cascade_cancel(conn, root_job_id=job_id)
+                for dep_id in cancelled:
+                    await repo.record_event(
+                        conn,
+                        job_id=dep_id,
+                        event="dependency_cancelled",
+                        detail={"root_cause": job_id},
+                    )
+
+                await repo.record_event(conn, job_id=job_id, event="dead", detail=error_entry)
+
+        if rate_limited and rate_class and self._rate_limiter is not None:
+            try:
+                await self._rate_limiter.drain(rate_class)
+            except Exception as exc:
+                logger.warning(
+                    "[fail] Rate-limit feedback could not drain bucket",
+                    job_id=job_id,
+                    rate_class=rate_class,
+                    error_type=type(exc).__name__,
+                )
+
+        if will_retry:
+            return FailOutcome(accepted=True, will_retry=True)
+
+        assert term is not None
+        if (gate_resolved or hook_id) and self._registry is not None:
             self._registry.wake.set()
         metrics.jobs_total.labels(tenant=term.tenant, task=term.task_name, state="dead").inc()
         metrics.archive_moved_total.labels(final_state="dead").inc()
@@ -291,7 +385,7 @@ def _merge_gate_manifest(
     on_complete: dict[str, Any],
     *,
     gate_id: str,
-    fire: repo.GateFire,
+    resolution: repo.GateResolution,
     results: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Merge the gate manifest into the continuation's payload under ``__gate__``.
@@ -309,24 +403,19 @@ def _merge_gate_manifest(
     payload["__gate__"] = {
         "gate_id": gate_id,
         "results": list(results or []),
-        "expected": fire.expected,
-        "succeeded": fire.succeeded,
+        "expected": resolution.expected,
+        "succeeded": resolution.succeeded,
     }
     oc["payload"] = payload
     return oc
 
 
-def _error_entry(error_type: str, message: str, stack_hash: str, retryable: bool) -> dict[str, Any]:
-    return {
-        "type": error_type,
-        "message": message[:2048],  # 2KB cap (proto contract)
-        "stack_hash": stack_hash,
-        "retryable": retryable,
-        "at": datetime.now(UTC).isoformat(),
-    }
-
-
-def _next_run_at(attempt: int, backoff: dict[str, Any] | None) -> datetime:
+def _next_run_at(
+    attempt: int,
+    backoff: dict[str, Any] | None,
+    *,
+    minimum_delay_s: float | None = None,
+) -> datetime:
     cfg = backoff or {}
     policy = BackoffPolicy(
         base_s=cfg.get("base_s", 1.0),
@@ -334,4 +423,7 @@ def _next_run_at(attempt: int, backoff: dict[str, Any] | None) -> datetime:
         cap_s=cfg.get("cap_s", 300.0),
         jitter=cfg.get("jitter", True),
     )
-    return datetime.now(UTC) + timedelta(seconds=policy.delay(attempt))
+    delay = policy.delay(attempt)
+    if minimum_delay_s is not None:
+        delay = max(delay, minimum_delay_s)
+    return datetime.now(UTC) + timedelta(seconds=delay)

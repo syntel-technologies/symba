@@ -99,16 +99,32 @@ async def claim(
     per_group_cap: int,
     rate_quotas: dict[str, int] | None = None,
 ) -> list[ClaimedJob]:
-    """THE hot query. One transaction; caller opens it."""
-    rows = await conn.fetch(
-        Q.CLAIM,
-        worker_tags,
-        exhausted_rate_classes,
-        limit,
-        claimed_by,
-        per_group_cap,
-        rate_quotas or {},
-    )
+    """Atomically claim jobs while enforcing exact per-group headroom.
+
+    The preparation statement initializes missing counters; ``claim.sql`` then
+    locks each selected capped group, consumes only its remaining headroom, and
+    moves chosen rows to ``running``. The nested transaction makes those two
+    statements atomic both for direct callers and callers with a surrounding
+    service transaction.
+    """
+    quotas = rate_quotas or {}
+    async with conn.transaction():
+        await conn.execute(
+            Q.PREPARE_GROUP_COUNTERS,
+            worker_tags,
+            exhausted_rate_classes,
+            limit,
+            quotas,
+        )
+        rows = await conn.fetch(
+            Q.CLAIM,
+            worker_tags,
+            exhausted_rate_classes,
+            limit,
+            claimed_by,
+            per_group_cap,
+            quotas,
+        )
     return [_to_claimed(r) for r in rows]
 
 
@@ -210,9 +226,14 @@ async def insert_continuation(
 ) -> str:
     """Statement 3 of Complete: enqueue the chain continuation.
 
-    Runs in the SAME tx as the terminal move. Inherits lineage + routing +
-    on_failure from the just-succeeded predecessor so the chain stays in one
-    pipeline/lane/stage and a DEAD tail still fires the submitter's failure hook.
+    Runs in the SAME tx as the terminal move. Inherits lineage, worker routing,
+    and on_failure from the just-succeeded predecessor so the chain stays in one
+    pipeline/stage and a DEAD tail still fires the submitter's failure hook.
+
+    ``rate_class`` is deliberately job-local admission metadata, not chain
+    routing. A continuation must declare its own class when it performs another
+    provider call; blindly inheriting the predecessor's class spends quota on
+    DB-only apply/finalize tails.
     """
     new_id = await conn.fetchval(
         Q.COMPLETE_CONTINUATION,
@@ -227,7 +248,7 @@ async def insert_continuation(
         predecessor.group_key,
         predecessor.max_concurrent_per_group,
         predecessor.runs_on,
-        predecessor.rate_class,
+        None,
         predecessor.lease_ttl_s,
         predecessor.on_failure,
     )
@@ -292,8 +313,9 @@ async def create_gate(
 
 
 @dataclass(slots=True)
-class GateFire:
-    fired: bool
+class GateResolution:
+    resolved: bool
+    satisfied: bool
     on_complete: dict[str, Any]
     tenant: str
     ctx_id: str | None
@@ -305,11 +327,13 @@ class GateFire:
 
 async def bump_gate(
     conn: asyncpg.Connection, *, gate_id: str, child_succeeded: bool, child_failed: bool
-) -> GateFire | None:
-    """Settle one child into its gate; claim-once fire.
+) -> GateResolution | None:
+    """Settle one child into its gate; claim resolution exactly once.
 
     Returns None when the gate row is gone (never happens in a healthy tx). The
-    `fired` flag is True for exactly the tx that crossed the policy threshold.
+    `resolved` flag is True for exactly the tx that either satisfied the policy
+    or proved it unsatisfied by settling the final child. `satisfied` selects the
+    success continuation versus its nested on_failure hook.
 
     Outcome encoding (spec 7.2): success -> (True, False); dead -> (False, True);
     skip -> (False, False) — a non-failure no-op that advances only
@@ -318,8 +342,9 @@ async def bump_gate(
     row = await conn.fetchrow(Q.BUMP_GATE, gate_id, child_succeeded, child_failed)
     if row is None:
         return None
-    return GateFire(
-        fired=bool(row["fired"]),
+    return GateResolution(
+        resolved=bool(row["resolved"]),
+        satisfied=bool(row["satisfied"]),
         on_complete=row["on_complete"],
         tenant=row["tenant"],
         ctx_id=row["ctx_id"],
