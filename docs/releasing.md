@@ -83,8 +83,12 @@ job submission and lookup. Only after that check passes does the workflow attach
 `compose.quickstart.yml`. This standalone local evaluation asset pins all Symba
 images by digest and supplies their matching release ID. It selects Docker Hub
 when configured, otherwise GHCR. `images.json` records both registry names when
-mirroring is enabled. Release tags use the `v` prefix; no floating `latest` image
-tag is published. The GitHub latest-release download URL selects the Compose file.
+mirroring is enabled. Release tags use the `v` prefix. After smoke checks and
+asset attachment succeed, `promote-latest.yml` copies the verified digests to
+`latest` in both configured registries. It serializes promotions and skips
+historical releases, preventing an older backfill from rolling the alias back.
+Backfills promote only Docker Hub. Version tags and digest-pinned assets remain
+unchanged. The GitHub latest-release download URL selects the Compose file.
 
 For an already released version, run **Publish existing release to Docker Hub**
 with its stable tag. This verifies the original successful release workflow,

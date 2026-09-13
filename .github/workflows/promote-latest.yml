@@ -1,0 +1,86 @@
+name: Promote verified stable images to latest
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      backfill:
+        type: boolean
+        default: false
+    secrets:
+      DOCKERHUB_TOKEN:
+        required: false
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: stable-image-latest
+  cancel-in-progress: false
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Select the current stable release and verify its inventory
+        id: release
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          VERSION: ${{ inputs.version }}
+          BACKFILL: ${{ inputs.backfill }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const crypto = require('node:crypto');
+            const tag = process.env.VERSION;
+            if (!/^v\d+\.\d+\.\d+$/.test(tag)) throw new Error('Stable version required');
+            const releases = await github.paginate(github.rest.repos.listReleases, {...context.repo, per_page: 100});
+            const stable = releases.filter(r => !r.draft && !r.prerelease && /^v\d+\.\d+\.\d+$/.test(r.tag_name));
+            stable.sort((a, b) => {
+              const x = a.tag_name.slice(1).split('.').map(Number);
+              const y = b.tag_name.slice(1).split('.').map(Number);
+              return y[0] - x[0] || y[1] - x[1] || y[2] - x[2];
+            });
+            if (stable[0]?.tag_name !== tag) {
+              core.notice('Skipping historical release: latest must not move backwards');
+              core.setOutput('promote', 'false');
+              return;
+            }
+            const release = stable[0];
+            async function asset(name) {
+              const entry = release.assets.find(a => a.name === name);
+              if (!entry) throw new Error(`Missing ${name}`);
+              const {data} = await github.rest.repos.getReleaseAsset({...context.repo, asset_id: entry.id, headers: {accept: 'application/octet-stream'}});
+              return Buffer.from(data);
+            }
+            const backfill = process.env.BACKFILL === 'true';
+            const name = backfill ? 'images-dockerhub.json' : 'images.json';
+            const inventory = await asset(name);
+            const sums = (await asset(backfill ? 'DOCKERHUB-SHA256SUMS' : 'SHA256SUMS')).toString();
+            const hash = crypto.createHash('sha256').update(inventory).digest('hex');
+            if (!sums.split('\n').includes(`${hash}  ${name}`)) throw new Error('Inventory checksum mismatch');
+            const manifest = JSON.parse(inventory);
+            const {data: commit} = await github.rest.repos.getCommit({...context.repo, ref: tag});
+            if (manifest.version !== tag || manifest.revision !== commit.sha) throw new Error('Release identity mismatch');
+            fs.writeFileSync('latest-inventory.json', inventory);
+            core.setOutput('promote', 'true');
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        if: steps.release.outputs.promote == 'true'
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        if: steps.release.outputs.promote == 'true' && !inputs.backfill
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        if: steps.release.outputs.promote == 'true' && vars.DOCKERHUB_NAMESPACE != ''
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Promote the verified digests without rebuilding
+        if: steps.release.outputs.promote == 'true'
+        env:
+          DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
+          HUB_ONLY: ${{ inputs.backfill }}
+        run: python3 -m tools.promote_latest latest-inventory.json

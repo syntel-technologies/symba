@@ -199,3 +199,13 @@ jobs:
               }
               await github.rest.repos.uploadReleaseAsset({...context.repo, release_id: release.id, name, data});
             }
+
+  latest:
+    needs: assets
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/promote-latest.yml
+    with:
+      version: ${{ github.ref_name }}
+    secrets: inherit
