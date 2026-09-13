@@ -1,7 +1,7 @@
 {
   "name": "symba-frontend",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Symba operator console SPA. Served as a separate nginx container; the engine is API-only.",
   "scripts": {

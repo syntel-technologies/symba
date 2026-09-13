@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.0](https://github.com/syntel-technologies/symba/compare/v0.1.0...v0.2.0) (2026-09-13)
+
+
+### Features
+
+* publish Docker Hub images and prebuilt quickstart ([#14](https://github.com/syntel-technologies/symba/issues/14)) ([e30cadd](https://github.com/syntel-technologies/symba/commit/e30cadd079ef19b7c0b7376b19bdd40aa3dab659))
+* publish Symba releases on Docker Hub ([dbd9766](https://github.com/syntel-technologies/symba/commit/dbd97661bb8eeb2fa017a03e8337168fa2e223d3))
+* publish Symba releases on Docker Hub ([#15](https://github.com/syntel-technologies/symba/issues/15)) ([dbd9766](https://github.com/syntel-technologies/symba/commit/dbd97661bb8eeb2fa017a03e8337168fa2e223d3))
+
 ## 0.1.0 (2026-09-13)
 
 
