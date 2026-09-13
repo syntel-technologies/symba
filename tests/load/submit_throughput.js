@@ -33,6 +33,7 @@ const TENANT = __ENV.SYMBA_TENANT || 'loadtest';
 const submitLatency = new Trend('symba_submit_latency_ms', true);
 
 export const options = {
+  summaryTrendStats: ["avg", "min", "med", "max", "p(90)", "p(95)", "p(99)"],
   scenarios: {
     // Measure the sustained 500/s target. Ramping the entire run previously
     // averaged below 300/s, making the unchanged 450/s floor impossible.

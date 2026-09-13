@@ -16,9 +16,8 @@ from contextvars import ContextVar
 from typing import Any
 from uuid import uuid4
 
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.types import ASGIApp
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 # NOTE: this module MUST NOT import symba.observability.logging at module scope —
 # logging imports get_trace_id from here (services/tracing <- config/logging
@@ -59,7 +58,7 @@ def _read_inbound_trace_id(request: Request) -> str | None:
     return None
 
 
-class TraceIDMiddleware(BaseHTTPMiddleware):
+class TraceIDMiddleware:
     """Attach a stable correlation ID to every HTTP request.
 
     Resolution order: inbound X-Symba-Request-Id header -> ?trace_id= query ->
@@ -67,13 +66,20 @@ class TraceIDMiddleware(BaseHTTPMiddleware):
     """
 
     def __init__(self, app: ASGIApp) -> None:
-        super().__init__(app)
+        self.app = app
 
-    async def dispatch(self, request: Request, call_next):  # type: ignore[override]
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        request = Request(scope)
         trace_id = _read_inbound_trace_id(request) or str(uuid4())
-        trace_id_context.set(trace_id)
+        token = trace_id_context.set(trace_id)
         request.state.trace_id = trace_id
-        return await call_next(request)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            trace_id_context.reset(token)
 
 
 def configure_tracing(otlp_endpoint: str) -> bool:

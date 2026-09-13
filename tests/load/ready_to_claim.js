@@ -36,6 +36,7 @@ const TENANT = __ENV.SYMBA_TENANT || 'loadtest';
 const readyToClaimP95 = new Trend('symba_ready_to_claim_p95_ms', true);
 
 export const options = {
+  summaryTrendStats: ["avg", "min", "med", "max", "p(90)", "p(95)", "p(99)"],
   scenarios: {
     // Steady submit pressure so the dispatcher is continuously matching against
     // the worker fleet — the "busy system" half of the latency floor (vs the idle floor).
@@ -86,7 +87,9 @@ export function teardown() {
 // Coarse Prometheus histogram_quantile over the exposition-format bucket lines:
 //   symba_ready_to_claim_ms_bucket{le="150"} 1234
 // Returns the upper bound of the first bucket whose cumulative count crosses q*total,
-// the same estimate PromQL's histogram_quantile gives — enough for a floor gate.
+// a conservative upper bound, not PromQL's interpolated histogram_quantile.
+// A pass proves the percentile is below the gate; a boundary-bucket failure may
+// need finer buckets to distinguish values around the threshold.
 function histogramQuantile(body, metric, q) {
   const bucketRe = new RegExp(`^${metric}_bucket\\{[^}]*le="([^"]+)"\\}\\s+([0-9.e+]+)`);
   const buckets = [];

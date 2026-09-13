@@ -84,8 +84,11 @@ async def test_v1_without_credentials_is_401(engine: EngineState) -> None:
 
 async def test_v1_with_bad_token_is_401(engine: EngineState) -> None:
     async with _client(engine) as c:
-        resp = await c.get("/v1/stats/board", headers={"authorization": "Bearer wrong"})
+        resp = await c.get(
+            "/v1/stats/board", headers={"authorization": "Bearer wrong", "X-Symba-Request-Id": "failed-auth"}
+        )
     assert resp.status_code == 401
+    assert resp.json()["trace_id"] == "failed-auth"
 
 
 async def test_v1_query_token_is_not_a_credential(engine: EngineState) -> None:

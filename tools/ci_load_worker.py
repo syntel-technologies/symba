@@ -16,15 +16,19 @@ from symba.v1 import data_plane_pb2_grpc as rpc
 async def serve(target: str) -> None:
     capacity = 256
     active = 0
-    updates: asyncio.Queue[int] = asyncio.Queue()
-    await updates.put(capacity)
+    updates = asyncio.Event()
+    updates.set()
 
     async def frames() -> AsyncIterator[dp.ClaimRequest]:
         while True:
             try:
-                free = await asyncio.wait_for(updates.get(), timeout=5)
+                await asyncio.wait_for(updates.wait(), timeout=5)
             except TimeoutError:
-                free = capacity - active
+                pass
+            updates.clear()
+            # Capacity frames are snapshots, not deltas. Coalesce completions so
+            # a slow stream never replays an unbounded queue of stale capacity.
+            free = capacity - active
             yield dp.ClaimRequest(
                 worker_id="ci-load-echo",
                 free_slots=free,
@@ -48,7 +52,7 @@ async def serve(target: str) -> None:
             if not reply.accepted:
                 raise RuntimeError("Engine rejected CI worker completion")
             active -= 1
-            await updates.put(capacity - active)
+            updates.set()
 
         async with asyncio.TaskGroup() as group:
             async for assignment in stub.Claim(frames()):
