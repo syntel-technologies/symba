@@ -21,8 +21,17 @@ async def serve(target: str) -> None:
 
     async def frames() -> AsyncIterator[dp.ClaimRequest]:
         while True:
-            free = await updates.get()
-            yield dp.ClaimRequest(worker_id="ci-load-echo", free_slots=free, sdk_version="0.1.0", tags=["general"])
+            try:
+                free = await asyncio.wait_for(updates.get(), timeout=5)
+            except TimeoutError:
+                free = capacity - active
+            yield dp.ClaimRequest(
+                worker_id="ci-load-echo",
+                free_slots=free,
+                sdk_version="0.1.0",
+                tags=["general"],
+                registered_tasks=["loadtest.echo"],
+            )
 
     async with grpc.aio.insecure_channel(target) as channel:
         await asyncio.wait_for(channel.channel_ready(), timeout=30)

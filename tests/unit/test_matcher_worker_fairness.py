@@ -24,9 +24,17 @@ def _worker(worker_id: str, tag: str = "ingest") -> WorkerConn:
 
 def _job(number: int) -> ClaimedJob:
     return ClaimedJob(
-        id=f"job-{number}", task_name="parse", tenant="default", group_key=None,
-        max_concurrent_per_group=None, priority=5, lease_token=f"lease-{number}",
-        lease_ttl_s=60, payload={}, attempt=1, raw={},
+        id=f"job-{number}",
+        task_name="parse",
+        tenant="default",
+        group_key=None,
+        max_concurrent_per_group=None,
+        priority=5,
+        lease_token=f"lease-{number}",
+        lease_ttl_s=60,
+        payload={},
+        attempt=1,
+        raw={},
     )
 
 
@@ -70,7 +78,9 @@ async def test_authoritative_capacity_cannot_be_reopened_by_advisory_slots() -> 
     a, b = [_worker(name) for name in ("a", "b")]
     capacities = {"a": 0, "b": 1}
     assigned, attribution = await matcher._assign_round_robin(
-        [_job(0), _job(1)], [a, b], capacity_by_worker=capacities,
+        [_job(0), _job(1)],
+        [a, b],
+        capacity_by_worker=capacities,
     )
     assert assigned == 1
     assert attribution[0][1] == "b"

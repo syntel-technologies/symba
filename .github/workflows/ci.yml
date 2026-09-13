@@ -147,7 +147,11 @@ jobs:
       - run: make proto
       - name: L2 integration tests
         run: uv run --no-sync pytest -m 'l2 or l3' -q
+      - name: Give the query-plan gate a fresh database
+        run: docker exec '${{ job.services.postgres.id }}' createdb -U symba symba_explain
       - name: EXPLAIN gate (claim must use ix_jobs_claimable, no Seq Scan)
+        env:
+          SYMBA_POSTGRES__DSN: postgresql://symba:symba@localhost:5432/symba_explain
         run: uv run --no-sync python tools/explain_gate.py
 
   frontend:
@@ -165,7 +169,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npm run lint
-      - run: npm run test:sse
+      - run: npm test
       - run: npm run build
 
   required-checks:

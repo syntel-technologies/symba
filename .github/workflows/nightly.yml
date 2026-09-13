@@ -42,10 +42,9 @@ jobs:
           version: ${{ env.UV_VERSION }}
       - run: uv sync --frozen --extra dev --python ${{ env.PYTHON_VERSION }}
       - run: make proto
-      - name: L5 chaos scenarios 1-2
-        run: uv run --no-sync pytest -m l5 -q
-      - name: L6 dispatcher latency floor (worker-free, DB-clock)
-        run: uv run --no-sync pytest -m l6 -q
+      - name: Chaos convergence and dispatcher latency
+        # One session applies the schema once to the isolated service database.
+        run: uv run --no-sync pytest -m 'l5 or l6' -q
 
   load-l6:
     # Submit-throughput baseline. Brings the full stack
