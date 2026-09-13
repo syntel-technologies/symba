@@ -1,0 +1,111 @@
+name: Publish existing release to Docker Hub
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Successfully published release tag (for example v0.1.0)
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+  packages: read
+concurrency:
+  group: dockerhub-backfill
+  cancel-in-progress: false
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+      packages: read
+    env:
+      DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
+      SYMBA_IMAGE_PREFIX: docker.io/${{ vars.DOCKERHUB_NAMESPACE }}
+      SYMBA_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Verify the original release and its inventory
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const fs = require('node:fs');
+            const crypto = require('node:crypto');
+            const tag = process.env.SYMBA_VERSION;
+            if (!/^v\d+\.\d+\.\d+$/.test(tag)) throw new Error('A stable release tag is required');
+            if (!/^[a-z0-9]{4,30}$/.test(process.env.DOCKERHUB_NAMESPACE)) throw new Error('Configure DOCKERHUB_NAMESPACE');
+            const {data: release} = await github.rest.repos.getReleaseByTag({...context.repo, tag});
+            if (release.draft || release.prerelease) throw new Error('Release must be published and stable');
+            const {data: commit} = await github.rest.repos.getCommit({...context.repo, ref: tag});
+            const {data: ancestry} = await github.rest.repos.compareCommits({...context.repo, base: commit.sha, head: 'main'});
+            if (!['ahead', 'identical'].includes(ancestry.status)) throw new Error('Release must belong to main history');
+            const {data: runs} = await github.rest.actions.listWorkflowRuns({...context.repo, workflow_id: 'release.yml', head_sha: commit.sha, status: 'success', event: 'push'});
+            if (!runs.workflow_runs.some(run => run.head_sha === commit.sha && run.conclusion === 'success')) throw new Error('Original Release workflow has not passed');
+            async function asset(name) {
+              const entry = release.assets.find(item => item.name === name);
+              if (!entry) throw new Error(`Missing release asset ${name}`);
+              const {data} = await github.rest.repos.getReleaseAsset({...context.repo, asset_id: entry.id, headers: {accept: 'application/octet-stream'}});
+              return Buffer.from(data);
+            }
+            const inventory = await asset('images.json');
+            const sums = (await asset('SHA256SUMS')).toString();
+            const digest = crypto.createHash('sha256').update(inventory).digest('hex');
+            if (!sums.split('\n').some(line => line === `${digest}  images.json`)) throw new Error('Inventory checksum mismatch');
+            const manifest = JSON.parse(inventory.toString());
+            if (manifest.version !== tag || manifest.revision !== commit.sha) throw new Error('Inventory release mismatch');
+            const expected = new Set(['symba', 'symba-frontend', 'symba-flyway']);
+            if (manifest.images.length !== 3) throw new Error('Incomplete inventory');
+            for (const image of manifest.images) {
+              const name = image.image.split('/').pop();
+              if (!expected.delete(name) || image.image !== `ghcr.io/${context.repo.owner.toLowerCase()}/${name}` || image.tag !== tag || !/^sha256:[0-9a-f]{64}$/.test(image.digest)) throw new Error('Invalid inventory image');
+            }
+            fs.writeFileSync('mirror-inventory.json', inventory);
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Copy exact multi-platform images and prepare the quickstart
+        run: python3 tools/mirror_dockerhub.py mirror-inventory.json
+      - name: Verify pulls without Docker Hub credentials
+        run: docker logout
+      - name: Start the mirrored quickstart
+        run: docker compose -p symba-hub-smoke -f dockerhub-assets/compose.quickstart.yml up -d --wait --wait-timeout 180
+      - name: Verify the mirrored application
+        run: python3 tools/smoke_quickstart.py
+      - name: Logs on failure
+        if: failure()
+        run: docker compose -p symba-hub-smoke -f dockerhub-assets/compose.quickstart.yml logs --no-color --tail 100
+      - name: Clean up disposable database
+        if: always()
+        run: |
+          if [ -f dockerhub-assets/compose.quickstart.yml ]; then
+            docker compose -p symba-hub-smoke -f dockerhub-assets/compose.quickstart.yml down -v
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dockerhub-${{ inputs.version }}
+          path: dockerhub-assets/
+      - name: Attach Docker Hub quickstart without replacing original release assets
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const fs = require('node:fs');
+            const {data: release} = await github.rest.repos.getReleaseByTag({...context.repo, tag: process.env.SYMBA_VERSION});
+            for (const name of fs.readdirSync('dockerhub-assets')) {
+              const data = fs.readFileSync(`dockerhub-assets/${name}`);
+              const existing = release.assets.find(asset => asset.name === name);
+              if (existing) {
+                const prior = await github.rest.repos.getReleaseAsset({...context.repo, asset_id: existing.id, headers: {accept: 'application/octet-stream'}});
+                if (!Buffer.from(prior.data).equals(data)) throw new Error(`Refusing to replace different release asset ${name}`);
+                continue;
+              }
+              await github.rest.repos.uploadReleaseAsset({...context.repo, release_id: release.id, name, data});
+            }

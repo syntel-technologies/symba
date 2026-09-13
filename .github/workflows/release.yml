@@ -60,6 +60,29 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Configure image destinations
+        id: destinations
+        env:
+          DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          IMAGE: ${{ matrix.image }}
+        run: |
+          tags="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/$IMAGE:$GITHUB_REF_NAME"
+          if [[ -n "$DOCKERHUB_NAMESPACE" ]]; then
+            [[ "$DOCKERHUB_NAMESPACE" =~ ^[a-z0-9]{4,30}$ ]] || { echo 'Invalid Docker Hub namespace'; exit 1; }
+            [[ -n "$DOCKERHUB_USERNAME" && -n "$DOCKERHUB_TOKEN" ]] || { echo 'Configure DOCKERHUB_USERNAME and DOCKERHUB_TOKEN'; exit 1; }
+            tags="$tags,docker.io/$DOCKERHUB_NAMESPACE/$IMAGE:$GITHUB_REF_NAME"
+          else
+            echo '::notice::Docker Hub is not configured; publishing to GHCR only.'
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+      - name: Log in to Docker Hub
+        if: vars.DOCKERHUB_NAMESPACE != ''
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Build the versioned image
         id: image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -68,7 +91,7 @@ jobs:
           file: ${{ matrix.file }}
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ github.ref_name }}
+          tags: ${{ steps.destinations.outputs.tags }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -84,18 +107,49 @@ jobs:
           IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
           DIGEST: ${{ steps.image.outputs.digest }}
           TAG: ${{ github.ref_name }}
+          DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
         run: |
           python3 - <<'PYCODE'
           import json, os
           from pathlib import Path
-          Path('image.json').write_text(json.dumps({key.lower(): os.environ[key] for key in ['IMAGE', 'DIGEST', 'TAG']}, indent=2) + '\n')
+          record = {key.lower(): os.environ[key] for key in ['IMAGE', 'DIGEST', 'TAG']}
+          if namespace := os.environ['DOCKERHUB_NAMESPACE']:
+              record['dockerhub_image'] = f"docker.io/{namespace}/{record['image'].rsplit('/', 1)[1]}"
+          Path('image.json').write_text(json.dumps(record, indent=2) + '\n')
           PYCODE
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: digest-${{ matrix.image }}
           path: image.json
-  assets:
+  smoke:
     needs: images
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    env:
+      SYMBA_IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}
+      SYMBA_VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Start the prebuilt quickstart stack
+        run: docker compose -p symba-release-smoke -f compose.quickstart.yml up -d --wait --wait-timeout 180
+      - name: Verify authenticated submission through the console proxy
+        run: python3 tools/smoke_quickstart.py
+      - name: Container diagnostics
+        if: failure()
+        run: docker compose -p symba-release-smoke -f compose.quickstart.yml logs --no-color --tail 100
+      - name: Remove the disposable stack
+        if: always()
+        run: docker compose -p symba-release-smoke -f compose.quickstart.yml down -v
+  assets:
+    needs: smoke
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -117,6 +171,15 @@ jobs:
           assert len(images) == 3, 'Missing release image'
           manifest = {'version': os.environ['GITHUB_REF_NAME'], 'revision': os.environ['GITHUB_SHA'], 'images': images}
           Path('release-assets/images.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          compose = Path('compose.quickstart.yml').read_text()
+          for image in images:
+              name = image['image'].rsplit('/', 1)[1]
+              reference = image.get('dockerhub_image', image['image'])
+              template = '${SYMBA_IMAGE_PREFIX:?Set SYMBA_IMAGE_PREFIX}/' + name + ':${SYMBA_VERSION:?Set SYMBA_VERSION}'
+              assert template in compose, f'Missing quickstart image {name}'
+              compose = compose.replace(template, f"{reference}@{image['digest']}")
+          compose = compose.replace('${SYMBA_VERSION:?Set SYMBA_VERSION}', os.environ['GITHUB_REF_NAME'])
+          Path('release-assets/compose.quickstart.yml').write_text(compose)
           PYCODE
           (cd release-assets && sha256sum * > SHA256SUMS)
       - name: Attach verified artifacts to the existing release

@@ -1,0 +1,73 @@
+# Local evaluation using prebuilt images. No clone, source mounts, or build tools.
+# Release assets replace the image references with immutable digests and bake in
+# the matching release ID. In a checkout, set SYMBA_IMAGE_PREFIX and SYMBA_VERSION.
+services:
+  symba-postgres:
+    image: postgres:18.1@sha256:1090bc3a8ccfb0b55f78a494d76f8d603434f7e4553543d6e807bc7bd6bbd17f
+    environment:
+      POSTGRES_USER: symba
+      POSTGRES_PASSWORD: symba-local-dev-password
+      POSTGRES_DB: symba
+    volumes:
+      - symba-pgdata:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U symba -d symba"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  symba-flyway:
+    image: ${SYMBA_IMAGE_PREFIX:?Set SYMBA_IMAGE_PREFIX}/symba-flyway:${SYMBA_VERSION:?Set SYMBA_VERSION}
+    environment:
+      KNOR_RELEASE_ID: ${SYMBA_VERSION:?Set SYMBA_VERSION}
+      KNOR_RELEASE_MANIFEST_SHA256: unreleased
+      FLYWAY_CONFIG_FILES: /opt/symba/flyway/flyway.toml
+      FLYWAY_URL: jdbc:postgresql://symba-postgres:5432/symba
+      FLYWAY_USER: symba
+      FLYWAY_PASSWORD: symba-local-dev-password
+    command: migrate
+    depends_on:
+      symba-postgres:
+        condition: service_healthy
+
+  symba-engine:
+    image: ${SYMBA_IMAGE_PREFIX:?Set SYMBA_IMAGE_PREFIX}/symba:${SYMBA_VERSION:?Set SYMBA_VERSION}
+    environment:
+      KNOR_RELEASE_ID: ${SYMBA_VERSION:?Set SYMBA_VERSION}
+      KNOR_RELEASE_MANIFEST_SHA256: unreleased
+      SYMBA_APP__ENVIRONMENT: development
+      SYMBA_POSTGRES__HOST: symba-postgres
+      SYMBA_POSTGRES__USER: symba
+      SYMBA_POSTGRES__PASSWORD: symba-local-dev-password
+      SYMBA_POSTGRES__DATABASE: symba
+      SYMBA_AUTH__MODE: token
+      SYMBA_AUTH__TOKENS: '{"symba-local-dev-token":"default"}'
+    ports:
+      - "127.0.0.1:${ENGINE_HTTP_HOST_PORT:-7300}:7300"
+      - "127.0.0.1:${ENGINE_GRPC_HOST_PORT:-7233}:7233"
+    depends_on:
+      symba-flyway:
+        condition: service_completed_successfully
+      symba-postgres:
+        condition: service_healthy
+
+  symba-frontend:
+    image: ${SYMBA_IMAGE_PREFIX:?Set SYMBA_IMAGE_PREFIX}/symba-frontend:${SYMBA_VERSION:?Set SYMBA_VERSION}
+    environment:
+      KNOR_RELEASE_ID: ${SYMBA_VERSION:?Set SYMBA_VERSION}
+      KNOR_RELEASE_MANIFEST_SHA256: unreleased
+      ENGINE_HOST: symba-engine
+      ENGINE_PORT: "7300"
+    ports:
+      - "127.0.0.1:${UI_HOST_PORT:-8080}:8080"
+    depends_on:
+      symba-engine:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, --quiet, --spider, http://127.0.0.1:8080/]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  symba-pgdata:
