@@ -70,12 +70,26 @@ jobs:
         run: |
           uv run --no-sync python tools/ci_load_worker.py > /tmp/ci-load-worker.log 2>&1 &
           echo "$!" > /tmp/ci-load-worker.pid
+      - name: Capture benchmark resource usage
+        run: |
+          docker stats --format '{{json .}}' > /tmp/load-docker-stats.jsonl &
+          vmstat 1 > /tmp/load-vmstat.txt &
       - name: k6 submit-throughput (thresholds are the pass/fail gate)
-        run: k6 run -e SYMBA_URL=http://localhost:8080 tests/load/submit_throughput.js
+        run: k6 run --out json=/tmp/load-submit.json.gz -e SYMBA_URL=http://localhost:8080 tests/load/submit_throughput.js
       - name: k6 ready-to-claim p95 (busy-system scenario, target < 150ms)
         run: k6 run -e SYMBA_URL=http://localhost:8080 tests/load/ready_to_claim.js
       - name: regression gate vs committed baseline (>20% drop fails)
         run: uv run --no-sync python tools/load_regression_gate.py
+      - name: Capture final engine metrics
+        if: always()
+        run: curl --fail --max-time 5 http://localhost:8080/metrics -o /tmp/load-engine-metrics.txt || true
+      - name: Upload benchmark diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: load-diagnostics
+          path: /tmp/load-*
+          retention-days: 7
       - name: upload run summaries
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
