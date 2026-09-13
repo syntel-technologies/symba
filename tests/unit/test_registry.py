@@ -45,12 +45,14 @@ async def test_old_stream_cannot_mutate_or_unregister_replacement() -> None:
         tags=frozenset({"old"}),
         free_slots=4,
         labels={},
+        registered_tasks=frozenset({"old.task"}),
     )
     replacement = WorkerConn(
         worker_id="w1",
         tags=frozenset({"new"}),
         free_slots=8,
         labels={},
+        registered_tasks=frozenset({"new.task"}),
     )
     await registry.register(old)
     await registry.register(replacement)
@@ -59,12 +61,14 @@ async def test_old_stream_cannot_mutate_or_unregister_replacement() -> None:
         "w1",
         1,
         frozenset({"late-old-frame"}),
+        frozenset({"late.old.task"}),
         expected=old,
     )
     assert not await registry.unregister("w1", expected=old)
     assert await registry.snapshot_available() == [replacement]
     assert replacement.free_slots == 8
     assert replacement.tags == frozenset({"new"})
+    assert replacement.registered_tasks == frozenset({"new.task"})
     assert deleted == []
 
     assert await registry.unregister("w1", expected=replacement)
@@ -87,6 +91,39 @@ async def test_claim_exits_when_worker_request_stream_ends() -> None:
         await asyncio.wait_for(anext(stream), timeout=0.25)
 
     assert await registry.count() == 0
+
+
+async def test_claim_persists_registered_tasks_separately_from_tags() -> None:
+    observed: list[tuple[list[str], list[str]]] = []
+
+    async def on_upsert(
+        worker_id: str,
+        tags: list[str],
+        registered_tasks: list[str],
+        labels: dict[str, str],
+        slots: int,
+        slots_busy: int,
+    ) -> None:
+        del worker_id, labels, slots, slots_busy
+        observed.append((tags, registered_tasks))
+
+    registry = WorkerRegistry(on_upsert=on_upsert)
+    servicer = WorkerServicer(registry, None, None, None)  # type: ignore[arg-type]
+
+    async def frames():
+        yield dp.ClaimRequest(
+            worker_id="w-capabilities",
+            tags=["ingest"],
+            registered_tasks=["parse.document", "embed.batch"],
+            free_slots=4,
+            sdk_version=PROTOCOL_VERSION,
+        )
+
+    stream = servicer.Claim(frames(), None)  # type: ignore[arg-type]
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(anext(stream), timeout=0.25)
+
+    assert observed == [(["ingest"], ["embed.batch", "parse.document"])]
 
 
 def test_claim_reserved_label_reports_total_capacity() -> None:

@@ -23,7 +23,8 @@ from __future__ import annotations
 
 import json
 import time
-from collections import defaultdict
+from bisect import bisect_right
+from collections import OrderedDict, defaultdict
 
 from symba.config import SymbaConfig
 from symba.db import repository as repo
@@ -39,6 +40,10 @@ from symba.v1 import data_plane_pb2 as dp
 
 logger = logger.bind(service="matcher", context="engine/services")
 
+# Retain fairness across small dispatch batches without retaining disconnected
+# worker objects or an unbounded history of obsolete tag configurations.
+_MAX_WORKER_CURSORS = 1024
+
 
 class Matcher:
     def __init__(
@@ -49,6 +54,7 @@ class Matcher:
         self._cfg = cfg
         self._rate = rate_limiter
         self._last_rate_stall_log_at = 0.0
+        self._last_worker_by_tags: OrderedDict[tuple[str, ...], str] = OrderedDict()
 
     async def pass_(self) -> int:
         """Run one matching pass. Returns the number of jobs assigned this tick."""
@@ -208,11 +214,23 @@ class Matcher:
         jobs.claimed_by so each running job is attributable to its worker.
         """
         upstream_by_job = upstream_by_job or {}
+        if not jobs or not workers:
+            return 0, []
+        # Registry insertion order changes on reconnect and available snapshots
+        # omit saturated workers. Resume after the last assigned worker ID in a
+        # stable ring, even when that worker is absent from the current snapshot.
+        workers = sorted(workers, key=lambda worker: worker.worker_id)
+        tag_key = tuple(sorted(workers[0].tags))
+        previous_worker = self._last_worker_by_tags.get(tag_key, "")
+        idx = bisect_right([worker.worker_id for worker in workers], previous_worker)
         cap_bytes = self._cfg.matcher.max_upstream_inline_kb * 1024
         assigned = 0
         attribution: list[tuple[str, str, str]] = []
-        remaining = capacity_by_worker or {worker.worker_id: worker.free_slots for worker in workers}
-        idx = 0
+        remaining = (
+            dict(capacity_by_worker)
+            if capacity_by_worker is not None
+            else {worker.worker_id: worker.free_slots for worker in workers}
+        )
         for job in jobs:
             # Find the next worker (round-robin) that still has a free slot.
             placed = False
@@ -227,6 +245,10 @@ class Matcher:
                     assigned += 1
                     placed = True
                     attribution.append((job.id, w.worker_id, job.lease_token))
+                    self._last_worker_by_tags[tag_key] = w.worker_id
+                    self._last_worker_by_tags.move_to_end(tag_key)
+                    if len(self._last_worker_by_tags) > _MAX_WORKER_CURSORS:
+                        self._last_worker_by_tags.popitem(last=False)
                     metrics.jobs_total.labels(tenant=job.tenant, task=job.task_name, state="assigned").inc()
                     _observe_ready_to_claim(job)
                     break

@@ -169,9 +169,10 @@ async def test_workers_lists_registered_fleet(db: asyncpg.Connection, engine: En
     # The registry is in-memory; the fleet view reads the `workers` table the sweeper
     # maintains. Seed a row directly to prove the read path.
     await db.execute(
-        "INSERT INTO workers (worker_id, tags, slots, slots_busy) VALUES ($1, $2, $3, $4)",
+        "INSERT INTO workers (worker_id, tags, registered_tasks, slots, slots_busy) VALUES ($1, $2, $3, $4, $5)",
         "w-fleet",
         ["gpu"],
+        ["embed.batch", "parse.document"],
         8,
         3,
     )
@@ -179,25 +180,41 @@ async def test_workers_lists_registered_fleet(db: asyncpg.Connection, engine: En
         workers = (await client.get("/v1/workers")).json()["workers"]
         w = next(x for x in workers if x["worker_id"] == "w-fleet")
         assert w["tags"] == ["gpu"] and w["slots"] == 8 and w["slots_busy"] == 3
+        assert w["registered_tasks"] == ["embed.batch", "parse.document"]
 
 
 async def test_registry_persists_worker_to_table(db: asyncpg.Connection, engine: EngineState) -> None:
     # Registering a worker (via the gRPC Claim path in production) must mirror it into
     # the `workers` read model so the fleet view/count reflect it without any seeding.
     worker = WorkerConn(
-        worker_id="w-persist", tags=frozenset({"gpu"}), free_slots=8, labels={"az": "eu"}, slots_total=8
+        worker_id="w-persist",
+        tags=frozenset({"gpu"}),
+        free_slots=8,
+        labels={"az": "eu"},
+        registered_tasks=frozenset({"parse.document", "embed.batch"}),
+        slots_total=8,
     )
     await engine.registry.register(worker)
     row = await db.fetchrow(
-        "SELECT tags, labels, slots, slots_busy, stale FROM workers WHERE worker_id=$1", "w-persist"
+        "SELECT tags, registered_tasks, labels, slots, slots_busy, stale FROM workers WHERE worker_id=$1",
+        "w-persist",
     )
     assert row is not None
     assert list(row["tags"]) == ["gpu"] and row["slots"] == 8 and row["slots_busy"] == 0 and row["stale"] is False
+    assert list(row["registered_tasks"]) == ["embed.batch", "parse.document"]
 
     # A slot frame (doubling as a heartbeat) refreshes the busy gauge: 8 total, 5 free.
-    await engine.registry.update_slots("w-persist", free_slots=5)
-    busy = await db.fetchval("SELECT slots_busy FROM workers WHERE worker_id=$1", "w-persist")
-    assert busy == 3
+    await engine.registry.update_slots(
+        "w-persist",
+        free_slots=5,
+        registered_tasks=frozenset({"parse.document", "tag.apply"}),
+    )
+    refreshed = await db.fetchrow(
+        "SELECT slots_busy, registered_tasks FROM workers WHERE worker_id=$1",
+        "w-persist",
+    )
+    assert refreshed["slots_busy"] == 3
+    assert list(refreshed["registered_tasks"]) == ["parse.document", "tag.apply"]
 
     # A clean disconnect drops the row immediately (operator sees it leave at once).
     await engine.registry.unregister("w-persist")

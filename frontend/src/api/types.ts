@@ -70,6 +70,9 @@ export interface QueueStat {
 export interface WorkerRow {
   worker_id: string;
   tags: string[];
+  // Added in the worker-capability contract. Optional keeps the console safe
+  // during a rolling upgrade while older engines still omit the field.
+  registered_tasks?: string[];
   labels: Record<string, unknown>;
   slots: number;
   slots_busy: number;

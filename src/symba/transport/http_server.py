@@ -231,6 +231,7 @@ class QueuesDTO(BaseModel):
 class WorkerDTO(BaseModel):
     worker_id: str
     tags: list[str]
+    registered_tasks: list[str]
     labels: dict[str, Any]
     slots: int
     slots_busy: int
@@ -242,6 +243,7 @@ class WorkerDTO(BaseModel):
         return cls(
             worker_id=r.worker_id,
             tags=r.tags,
+            registered_tasks=r.registered_tasks,
             labels=r.labels,
             slots=r.slots,
             slots_busy=r.slots_busy,

@@ -5,6 +5,7 @@ import { api } from "../api/client";
 import type { JobListItem } from "../api/types";
 import { JobTable } from "../components/JobTable";
 import { Empty, ErrorBox, Loading, Panel } from "../components/Panel";
+import { registeredTasks } from "../lib/worker";
 
 // Per-worker drill-in: the selected worker's live capacity gauge + the jobs
 // attributed to it (jobs.claimed_by = worker_id, re-stamped by the matcher at
@@ -72,6 +73,7 @@ export function WorkerDetailView() {
 
   const worker = (fleetQ.data ?? []).find((w) => w.worker_id === workerId);
   const tags = worker?.tags ?? [];
+  const tasks = worker ? registeredTasks(worker) : [];
   const runningCount = (jobsQ.data ?? []).filter((j) => j.state === "running").length;
   const selectedGroup = groups.find((g) => g.ctxId === selectedCtx) ?? null;
 
@@ -112,7 +114,7 @@ export function WorkerDetailView() {
               <dd>{new Date(worker.last_seen).toLocaleTimeString()}</dd>
             </div>
             <div className="col-span-2 sm:col-span-4">
-              <dt className="text-xs uppercase tracking-wide text-symba-muted">Tags</dt>
+              <dt className="text-xs uppercase tracking-wide text-symba-muted">Routing tags</dt>
               <dd>
                 {tags.length ? (
                   <div className="mt-1 flex flex-wrap gap-1">
@@ -124,6 +126,26 @@ export function WorkerDetailView() {
                   </div>
                 ) : (
                   <span className="text-symba-muted">—</span>
+                )}
+              </dd>
+            </div>
+            <div className="col-span-2 sm:col-span-4">
+              <dt className="text-xs uppercase tracking-wide text-symba-muted">
+                Registered tasks{tasks.length ? ` (${tasks.length})` : ""}
+              </dt>
+              <dd>
+                {tasks.length ? (
+                  <div className="mt-1 max-h-64 overflow-y-auto rounded border border-symba-border p-2">
+                    <div className="flex flex-wrap gap-1">
+                      {tasks.map((task) => (
+                        <span key={task} className="rounded bg-symba-border px-1.5 py-0.5 font-mono text-xs">
+                          {task}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <span className="text-symba-muted">not reported by this worker SDK</span>
                 )}
               </dd>
             </div>
