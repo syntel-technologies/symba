@@ -34,20 +34,15 @@ const submitLatency = new Trend('symba_submit_latency_ms', true);
 
 export const options = {
   scenarios: {
-    // Ramp to a sustained arrival rate, holding steady long enough for stable
-    // percentiles. arrival-rate (not fixed VUs) so the metric is req/s, not
-    // "as fast as N VUs happen to go".
+    // Measure the sustained 500/s target. Ramping the entire run previously
+    // averaged below 300/s, making the unchanged 450/s floor impossible.
     submit_firehose: {
-      executor: 'ramping-arrival-rate',
-      startRate: 100,
+      executor: 'constant-arrival-rate',
+      rate: 500,
       timeUnit: '1s',
+      duration: '30s',
       preAllocatedVUs: 50,
       maxVUs: 200,
-      stages: [
-        { duration: '10s', target: 200 }, // warm up
-        { duration: '30s', target: 500 }, // sustain at the throughput floor
-        { duration: '5s', target: 0 }, // ramp down
-      ],
     },
   },
   thresholds: {
