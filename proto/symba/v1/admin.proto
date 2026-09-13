@@ -1,5 +1,6 @@
 syntax = "proto3";
 package symba.v1;
+
 import "google/protobuf/timestamp.proto";
 
 // admin.proto — rate classes, cron, fleet, DLQ ops.
@@ -22,7 +23,9 @@ message RateClass {
   double refill_per_s = 3;
 }
 message ListRateClassesRequest {}
-message ListRateClassesResponse { repeated RateClass classes = 1; }
+message ListRateClassesResponse {
+  repeated RateClass classes = 1;
+}
 
 message CronSchedule {
   string schedule_id = 1;
@@ -34,11 +37,24 @@ message CronSchedule {
   google.protobuf.Timestamp last_fire = 7;
   google.protobuf.Timestamp next_fire = 8;
 }
-message ListCronRequest { string tenant = 1; }
-message ListCronResponse { repeated CronSchedule schedules = 1; }
-message SetCronEnabledRequest { string schedule_id = 1; bool enabled = 2; string tenant = 3; }
-message DeleteCronRequest { string schedule_id = 1; string tenant = 2; }
-message DeleteCronResponse { bool deleted = 1; }
+message ListCronRequest {
+  string tenant = 1;
+}
+message ListCronResponse {
+  repeated CronSchedule schedules = 1;
+}
+message SetCronEnabledRequest {
+  string schedule_id = 1;
+  bool enabled = 2;
+  string tenant = 3;
+}
+message DeleteCronRequest {
+  string schedule_id = 1;
+  string tenant = 2;
+}
+message DeleteCronResponse {
+  bool deleted = 1;
+}
 
 message Worker {
   string worker_id = 1;
@@ -51,4 +67,6 @@ message Worker {
   repeated string registered_tasks = 8;
 }
 message ListWorkersRequest {}
-message ListWorkersResponse { repeated Worker workers = 1; }
+message ListWorkersResponse {
+  repeated Worker workers = 1;
+}

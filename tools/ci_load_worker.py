@@ -39,7 +39,7 @@ async def serve(target: str) -> None:
 
         async def complete(assignment: dp.JobAssignment) -> None:
             nonlocal active
-            if assignment.job.task_name != "loadtest.echo":
+            if assignment.job.spec.task_name != "loadtest.echo":
                 raise RuntimeError("Unexpected task in isolated CI engine")
             reply = await stub.Complete(
                 dp.CompleteRequest(job_id=assignment.job.id, lease_token=assignment.lease_token, result_json=b"{}"),

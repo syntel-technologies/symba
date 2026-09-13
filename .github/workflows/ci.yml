@@ -52,6 +52,10 @@ jobs:
       - uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1
         with:
           input: proto
+          version: 1.73.0
+          pr_comment: false
+          push: false
+          format: true
           lint: true
           breaking: true
           breaking_against: "https://github.com/${{ github.repository }}.git#branch=main,subdir=proto"

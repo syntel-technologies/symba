@@ -58,6 +58,7 @@ async def main() -> int:
             50,
             "explain-worker",
             8,
+            "{}",
         )
         raw = plan_rows[0][0]
         plan = json.loads(raw) if isinstance(raw, str) else raw
