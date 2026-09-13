@@ -70,3 +70,48 @@ Database tests create a disposable PostgreSQL 18 container when no external DSN 
 
 `Release` builds amd64/arm64 images for `ghcr.io/syntel-technologies/symba`, `symba-frontend` and `symba-flyway`, each using the release tag. It attaches the SQL migration bundle, SHA256 checksums and `images.json` containing the exact image digests and git revision. Deploy by digest for reproducibility. Apply Flyway migrations before starting the matching engine; the engine does not self-migrate. GHCR packages may need their initial visibility set to public by an owner after the first publication. The engine is not published to PyPI. The SDK distribution is `syntel-symba`; its Python imports and CLI remain `symba`.
 
+When the `DOCKERHUB_NAMESPACE` repository variable is set, the same build also
+publishes each image to `docker.io/<namespace>/<image>:vX.Y.Z`. Configure
+`DOCKERHUB_USERNAME` as a repository variable and `DOCKERHUB_TOKEN` as an Actions
+secret before enabling the namespace. Missing credentials then fail publication
+instead of silently skipping Docker Hub. With no namespace configured, GHCR
+publication remains available. Account and repository setup is in [Docker](docker.md).
+
+After image publication, a disposable stack pulls the GHCR images and verifies
+migrations, console startup, rejected unauthenticated submission, and authenticated
+job submission and lookup. Only after that check passes does the workflow attach
+`compose.quickstart.yml`. This standalone local evaluation asset pins all Symba
+images by digest and supplies their matching release ID. It selects Docker Hub
+when configured, otherwise GHCR. `images.json` records both registry names when
+mirroring is enabled. Release tags use the `v` prefix; no floating `latest` image
+tag is published. The GitHub latest-release download URL selects the Compose file.
+
+For an already released version, run **Publish existing release to Docker Hub**
+with its stable tag. This verifies the original successful release workflow,
+main ancestry, inventory checksum and exact revision before copying all three
+multi-platform images. It refuses to replace different existing image tags,
+checks the original digest at the destination, and smoke-tests the stack after
+logging out of Docker Hub. It adds `compose.quickstart.yml`, `images-dockerhub.json`
+and `DOCKERHUB-SHA256SUMS` to the release without changing the original assets.
+If an asset already exists with different contents, publication fails; use the
+workflow artifact to inspect the difference instead of overwriting release history.
+
+
+## Dependency update reviews
+
+Dependabot proposes changes into `dev`; an open update PR is not a supported release.
+Compiler/runtime protobuf packages are grouped separately from general Python
+updates. Review generated-code changes and required runtime floors together; do
+not disable drift or minimum-dependency checks to accept a compiler upgrade.
+
+ESLint and its plugins update as one toolchain, as do Vite and its build plugins.
+Do not use `--force` or `--legacy-peer-deps` to bypass incompatible peer ranges.
+TypeScript major proposals are deferred while `openapi-typescript` declares `^5.x`;
+`typescript-eslint` also currently excludes TypeScript 7. Patch/minor updates stay
+enabled. Remove the scoped major ignore after both upstream tools support the new
+compiler, then verify strict types, lint, API generation, frontend tests and build.
+
+Release-contract tests verify digest pins, exact Python tool pins and agreement
+between code generation and runtime dependencies. They deliberately do not freeze
+historical patch versions in assertions; reviewed dependency upgrades must still
+preserve reproducible builds and pass their functional checks.
