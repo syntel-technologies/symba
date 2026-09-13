@@ -147,6 +147,21 @@ doesn't know what they do.
 
 ## 🚀 Quickstart
 
+For prebuilt images, see the [Docker quickstart](docs/docker.md). Once a release
+ships `compose.quickstart.yml`, starting the complete stack requires only:
+
+```bash
+curl -fL https://github.com/syntel-technologies/symba/releases/latest/download/compose.quickstart.yml -o compose.quickstart.yml
+docker compose -f compose.quickstart.yml up -d --wait
+```
+
+Open http://localhost:8080 and sign in with `symba-local-dev-token`. This local
+evaluation stack binds ports to localhost and persists Postgres data in a Docker
+volume. It uses prebuilt engine, migration, and console images. For an existing
+Postgres database, the Docker guide also shows the direct `docker run` commands.
+
+To build from a source checkout instead:
+
 ```bash
 # 1. Bring up the whole stack: engine + PG18 + Flyway (migrations) + optional Redis + UI.
 #    gRPC stubs are generated inside the engine image at build time — no host `make proto`.
