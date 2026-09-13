@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.4@sha256:9ba7531bd80fb0a858632727cf7a112fbfd19b17e94c4e84ced81e24ef1a0dbc
 
-FROM alpine/openssl:3.5.4@sha256:42c7389ef077aed0eb4e96d0abbd094083d701bbaff1313073b061c0c9cd8278
+FROM alpine/openssl:3.5.8@sha256:f6def4887e8413b228b66f314d0bcf5c25b128d918a258f3b0b9d66a0327edcb
 
 COPY --chmod=0555 scripts/release/verify_provenance.sh /usr/local/bin/symba-verify-release
 COPY --chmod=0555 scripts/tls/preflight.sh /usr/local/bin/symba-runtime-preflight
