@@ -1,50 +1,30 @@
 # Load / benchmark suite (L6)
 
-k6 v2 scripts for the throughput/latency baselines named in the M1 exit criteria
-("claim benchmark baseline stored") and the requirement of ≥500
-claims/s per engine. The nightly CI job runs these with a stored
-baseline and **fails the run on a >20% throughput regression**.
+The nightly workflow runs a real engine, PostgreSQL 18.1 and gRPC echo workers, measures two distinct phases, and rejects a throughput regression greater than 20% against the committed submission baseline. Engine artifact publication reruns this suite on the tagged commit.
 
-## Scripts
+| Script | Workload | Gate |
+| --- | --- | --- |
+| `submit_throughput.js` | 500 HTTP submissions/sec for 30 seconds | >450/sec; <1% errors; submit p95 <50 ms and p99 <150 ms |
+| `ready_to_claim.js` | 300 submissions/sec for 40 seconds; phase-only engine histogram | Ready-to-claim p95 <150 ms; ≥11,880 iterations and claims; all response checks pass |
 
-| Script | Measures | CI gate |
-|---|---|---|
-| `submit_throughput.js` | `POST /v1/jobs` ingestion rate + latency (the front half of the claim pipeline) | `http_reqs rate>450`, `http_req_failed rate<0.01`, submit p95<50ms / p99<150ms |
-| `ready_to_claim.js` | queue→claim latency under load, read from the engine's own `symba_ready_to_claim_ms` histogram on `/metrics` (busy-system half of the latency floor) | `symba_ready_to_claim_p95_ms p(95)<150` |
+HTTP ingestion throughput is not a measurement of sustained completion throughput. The 500/sec phase must drain before the claim phase begins. Claim p95 is the conservative upper bound of a histogram bucket; it is not an interpolated percentile. See [results and limits](../../docs/performance-release-blocker.md).
 
-> `ready_to_claim.js` needs **real gRPC workers** draining the queue (compose brings
-> the SDK worker containers up); with no workers, ready-to-claim is unbounded and the
-> gate fails loudly — which is correct, an unattended queue is not "healthy". The
-> CI-fast, worker-free counterpart is `tests/integration/test_load_latency.py` (the
-> idle floor + synthetic burst), run under `pytest -m l6`.
+## Reproducing the workflow
 
-> The worker-side gRPC **claim** stream throughput is benchmarked in the nightly
-> gRPC suite (added with M3, once multi-worker routing exists). At M1 the meaningful,
-> HTTP-drivable baseline is submit rate — submit must comfortably outpace claim so it
-> is never the bottleneck when the required 10k-job burst drains.
+Use a **disposable checkout and stack**, never a deployed database or another running Compose project. The supplied Compose file contains fixed resource names; ensure they do not collide before starting it. The nightly workflow provides the complete authoritative commands.
 
-## Running locally
+1. Sync the locked Python 3.13 dev environment, generate protocol stubs and start the isolated Compose stack.
+2. Install k6 2.0.0. Start four processes with `uv run --no-sync python tools/ci_load_worker.py 127.0.0.1:7233 ci-load-echo-N 64`, replacing `N` with 0–3.
+3. Run `uv run --no-sync python tools/ci_load_prepare.py http://localhost:8080`. This verifies worker registration, warms 500 jobs and requires successful drain.
+4. Run `k6 run -e SYMBA_URL=http://localhost:8080 tests/load/submit_throughput.js`.
+5. Require drain with `uv run --no-sync python tools/ci_load_prepare.py http://localhost:8080 --drain-only`.
+6. Run `k6 run -e SYMBA_URL=http://localhost:8080 tests/load/ready_to_claim.js`, then `uv run --no-sync python tools/load_regression_gate.py`.
+7. Stop only the stack and workers created for this run.
 
-```bash
-# 1. bring the stack up (engine on :8080, PG18 + flyway sidecar)
-docker compose up -d
+The faster worker-free dispatcher test (`tests/integration/test_load_latency.py`, `pytest -m l6`) covers the idle floor and synthetic burst separately. The Compose file does not start benchmark workers for you.
 
-# 2. install k6 v2 (macOS)   brew install k6
-#    (linux)                 see https://grafana.com/docs/k6/latest/set-up/install-k6/
+## Baseline provenance
 
-# 3. run — writes the baseline JSON under baseline/
-k6 run -e SYMBA_URL=http://localhost:8080 tests/load/submit_throughput.js
-```
+`baseline/submit_throughput.summary.json` is the unmodified successful k6 artifact from [nightly run 34763666367](https://github.com/syntel-technologies/symba/actions/runs/34763666367). `baseline/provenance.json` records its engine revision, runner configuration, hashes and both phase results. It replaces the earlier unseeded placeholder; failed measurements were never used to lower the baseline.
 
-## Baseline
-
-`baseline/submit_throughput.summary.json` is produced by the script's
-`handleSummary()` (k6 v2 API). It is **committed** so the nightly regression gate has
-something to diff against. Regenerate it deliberately (not on every run) when a
-legitimate perf change lands, and note the machine/PG config in the commit message —
-absolute numbers are only comparable on like hardware; the gate compares *ratios*
-(current `http_reqs.rate` vs baseline `http_reqs.rate`, fail if <0.8×).
-
-Until the first nightly run on CI hardware populates it, the committed baseline is a
-placeholder documenting the expected shape; the CI gate treats a placeholder baseline
-as "record, don't compare" for the first run.
+The scripts overwrite summaries with fresh measurements. The comparison reads the committed prior version using `git show HEAD:...`, so it cannot compare a run against itself. Commit a replacement only deliberately through review, with a fully passing run and updated provenance. Standard hosted runners can vary; investigate a failure instead of repeatedly retrying until it disappears or silently changing thresholds. Absolute gates apply independently of the ratio.

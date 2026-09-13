@@ -23,7 +23,11 @@ After CI succeeds for a push to the current `main`, Release Please opens or upda
 
 A GitHub Release can exist while its artifact workflow is still running or has failed. A release is consumable only when **Release is green and its documented artifacts are attached**. Never claim that a tag alone proves a successful publication. Fix a publishing failure through a reviewed change and a new version when code changes; do not move a published tag. Existing release assets are never silently replaced with different bytes.
 
-## One-time release bot activation (organization owner)
+## Release bot configuration and rotation
+
+Activation was completed and verified on 13 September 2026. `Syntel Release Bot` (App ID `4930737`, installation `161378012`) has accepted Contents, Pull requests and Issues write permissions on the engine and SDK repositories. `RELEASE_APP_CLIENT_ID` is configured per repository; the organization secret `RELEASE_APP_PRIVATE_KEY` is accessible to both. [The engine preflight passed](https://github.com/syntel-technologies/symba/actions/runs/34762024565), including the single-repository scope check. A separate tag-creation rule allows only this App to create `v*` tags. The App has no bypass for main or existing tags. No initial release or artifact upload has run yet.
+
+The steps below document setup and key rotation; they are not outstanding activation work.
 
 Create one private GitHub App owned by `syntel-technologies`, named `Syntel Release Bot` (choose a unique slug if GitHub requires one):
 
@@ -64,5 +68,5 @@ Database tests create a disposable PostgreSQL 18 container when no external DSN 
 
 ## Artifacts and publication
 
-`Release` builds amd64/arm64 images for `ghcr.io/syntel-technologies/symba`, `symba-frontend` and `symba-flyway`, each using the release tag. It attaches the SQL migration bundle, SHA256 checksums and `images.json` containing the exact image digests and git revision. Deploy by digest for reproducibility. Apply Flyway migrations before starting the matching engine; the engine does not self-migrate. GHCR packages may need their initial visibility set to public by an owner after the first publication. This setup does not publish the engine under the SDK's `symba` PyPI name.
+`Release` builds amd64/arm64 images for `ghcr.io/syntel-technologies/symba`, `symba-frontend` and `symba-flyway`, each using the release tag. It attaches the SQL migration bundle, SHA256 checksums and `images.json` containing the exact image digests and git revision. Deploy by digest for reproducibility. Apply Flyway migrations before starting the matching engine; the engine does not self-migrate. GHCR packages may need their initial visibility set to public by an owner after the first publication. The engine is not published to PyPI. The SDK distribution is `syntel-symba`; its Python imports and CLI remain `symba`.
 

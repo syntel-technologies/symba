@@ -1,39 +1,42 @@
-# Engine performance gate — investigation and validation
+# Engine performance validation
 
-Measured on 13 September 2026 in [nightly run 34759476506](https://github.com/syntel-technologies/symba/actions/runs/34759476506), engine revision `7d6e25b4308eb87741c9a175dbe22a9652738844`.
+The existing nightly gate passed on 13 September 2026 in [run 34763666367](https://github.com/syntel-technologies/symba/actions/runs/34763666367), engine revision `e7ccb890a879a432b01d15a4a01ec08471afa10b`. Both load phases, drain, chaos convergence and the database-clock dispatcher checks passed. The submission summary is now the measured baseline; [provenance](../tests/load/baseline/provenance.json) records the environment, artifact hashes and phase metrics.
 
-The harness now builds the actual engine, runs a real echo worker and applies test migrations only once. The protocol field and Python environment failures are repaired. Chaos convergence and the database-clock dispatcher checks pass. The sustained end-to-end HTTP submission test still fails its existing requirements:
-
-| Metric | Observed | Required |
+| Measurement | Result | Gate |
 | --- | --- | --- |
-| HTTP submissions | 339.03/sec | >450/sec at 500/sec offered load |
-| Submit p95 latency | approximately 1.33 sec | <50 ms |
-| Completed HTTP iterations | 10,313 in 30.4 sec | sustained offered load |
+| HTTP submissions, 500/sec offered for 30 seconds | 499.76/sec; 15,001 accepted | >450/sec |
+| Submit p95 / p99 | 40.48 ms / 56.70 ms | <50 ms / <150 ms |
+| Submission errors / response checks | 0% / 100% | <1% errors |
+| Ready-to-claim p95 at 300 submissions/sec for 40 seconds | ≤25 ms histogram upper bound | <150 ms |
+| Claim-phase iterations / claimed jobs | 12,001 / 12,001 | ≥11,880 each |
+| Drain and chaos checks | Passed | Required |
 
-This is a failed performance measurement, not a passing baseline. The committed baseline remains unseeded; do not copy this failed result into it to normalize a regression. The ready-to-claim k6 scenario and baseline comparison did not run after the submission failure, so their outcome is unknown. The repaired worker no longer crashed in this run.
+## Scope and limits
 
-The run co-locates the HTTP load generator, worker, engine, proxy, PostgreSQL and Redis on a standard GitHub-hosted Ubuntu runner. The measurement does not by itself identify whether runner contention, worker throughput, SQL execution, pool waits or the API path is the bottleneck. No performance threshold was lowered and no production performance claim is justified from this run.
+This is a short, warmed benchmark on a standard GitHub-hosted Ubuntu runner with the engine, PostgreSQL 18.1, Redis, proxy, k6 2.0.0 and four real gRPC echo workers co-located. Each worker has 64 slots, preserving the original total of 256. The harness verifies registration, warms 500 jobs, requires successful drain and excludes preceding phases from the claim histogram. A reset or missing claim population fails the measurement. Submission failure still fails the job while the second phase can collect diagnostics after a successful drain.
 
-Before the first engine release: reproduce the same workload, record runner CPU/memory, pool wait and query timings, check dispatcher/worker capacity reporting, profile submission and completion together, and review any implementation or explicitly justified benchmark-environment change. Rerun submission, ready-to-claim and baseline comparison successfully; only then seed a measured baseline through a PR. The engine publisher runs this suite and cannot publish artifacts while it fails. Functional CI and security review remain useful independently.
+The result resolves the observed nightly CI failure; it does not prove every production throughput target. The 500/sec phase measures **HTTP ingestion**, and its queue accumulated work that drained after submission stopped. The low claim-latency gate measures **300/sec**, not 500 sustained claims or completions/sec. Larger payloads, authenticated/TLS deployments, multi-engine contention, cold starts and long-running workload capacity need their own measurements. A previous cold-start run exceeded the p99 target. Do not advertise 500 completed jobs/sec with bounded queue delay from these results.
 
-## HTTP-path fix (13 September 2026)
+No throughput/latency requirement, transaction durability, lease accounting, audit write or tenant-isolation check was relaxed. Nightly still enforces the absolute limits and a maximum 20% throughput regression against the committed baseline; engine artifact publishing reruns the suite on the exact tag. One successful run is evidence for this revision and environment, not immunity from future regression or shared-runner variance.
 
-An isolated local PostgreSQL 18.1 + engine + real gRPC echo worker run reproduced the latency failure with the same k6 2.0.0 script. Removing a synchronous dependency's unnecessary thread-pool handoff improved the request path but was insufficient alone. Replacing the two `BaseHTTPMiddleware` layers with streaming-safe ASGI middleware removed per-request task groups and proxy channels. Tracing now also covers rejected authentication and restores the caller's context after each response. The test worker coalesces capacity snapshots like the SDK instead of replaying stale free-slot counts from an unbounded queue.
+## Fixes and regression coverage
 
-The resulting local submission run sustained 499.27 requests/sec with p95 16.25 ms; both unchanged p95 <50 ms and p99 <150 ms thresholds passed. This is a local diagnostic result, not the GitHub-hosted baseline. Unit and HTTP auth-boundary tests passed (171 tests, 100% core coverage), including concurrent streaming trace isolation. The cloud nightly run must still pass both phases before the release blocker is considered resolved or a baseline is committed.
+- Removed unnecessary thread-pool dispatch for the state-only HTTP principal dependency and replaced two `BaseHTTPMiddleware` layers with streaming-safe ASGI middleware. Tests cover concurrent streaming trace isolation and authentication failures; trace context resets after responses.
+- Reused proxy upstream HTTP/1.1 connections. CPython Unix uses uvloop for the shared HTTP/gRPC/database event loop and httptools for Uvicorn parsing. Windows, other Python implementations and asyncio debug mode retain the standard loop. See [uvloop usage](https://github.com/MagicStack/uvloop#using-uvloop), [Uvicorn settings](https://www.uvicorn.org/settings/) and [uvloop's debug-mode issue](https://github.com/MagicStack/uvloop/issues/715).
+- Added append-only migration `V011__archive_lookup_indexes.sql`: the archive created with `LIKE ... INCLUDING DEFAULTS` lacked a primary-key lookup index, so every completed job's audit INSERT scanned archive partitions twice. The new `(id)` archive index and `(tenant, id)` ledger index avoid growing history scans. An `EXPLAIN ANALYZE` regression over 50,000 archived jobs rejects sequential archive scans and verifies tenant/context attribution.
+- Coalesced bursty worker read-model writes to once per second per connection. Scheduling capacity stays immediate in memory. Metadata/capacity changes, reconnect and transition to fully idle persist immediately; idle heartbeats refresh liveness. Burst/idle/heartbeat and real registry integration tests cover this behavior.
+- Repaired the real load worker's protocol and coalesced capacity snapshots instead of queuing stale frames. Nightly records request latency, engine histograms, container resource samples and host counters for diagnosis.
 
-The first cloud rerun (`34761333182`) passed throughput at 491.73/sec, but still failed latency at p95 234.97 ms. Native profiling then identified substantial socket/event-loop dispatch and Python HTTP parsing overhead. The runtime now selects uvloop for the shared HTTP/gRPC/PostgreSQL loop on CPython Unix and installs httptools for Uvicorn's automatic parser selection. The stdlib loop remains available on Windows, other Python implementations, and when asyncio debug mode is enabled (uvloop 0.22.1 has a known debug stack-finalization issue). See [uvloop usage](https://github.com/MagicStack/uvloop#using-uvloop), [Uvicorn settings](https://www.uvicorn.org/settings/), and [the debug-mode issue](https://github.com/MagicStack/uvloop/issues/715).
+**Migration deployment:** `V011` uses standard blocking index creation on partitioned parents. Large existing archives need a maintenance window and disk-space budget. Do not change already-applied migration checksums; the engine does not self-migrate.
 
-The console proxy now reuses upstream HTTP/1.1 connections. Nightly artifacts capture per-request latency metrics, engine histograms, container resource samples and host CPU/memory counters so a cloud failure can be diagnosed from evidence rather than rerun blindly. No latency, throughput, durability or authorization requirement was relaxed.
+## Selected investigation evidence
 
-## Archive growth finding
+| Run | Change / finding | Submit rate | Submit p95 | Outcome |
+| --- | --- | --- | --- | --- |
+| [34759476506](https://github.com/syntel-technologies/symba/actions/runs/34759476506) | Initial repaired harness | 339.03/sec | ~1.33 sec | Failed |
+| [34761333182](https://github.com/syntel-technologies/symba/actions/runs/34761333182) | ASGI HTTP path | 491.73/sec | 234.97 ms | Failed |
+| [34762507647](https://github.com/syntel-technologies/symba/actions/runs/34762507647) | Archive indexes | 495.20/sec | 45.38 ms | Failed p99; insufficient worker drain |
+| [34763066525](https://github.com/syntel-technologies/symba/actions/runs/34763066525) | Warmed four-worker fleet | 494.88/sec | 169.07 ms | Failed; completion/status contention |
+| [34763666367](https://github.com/syntel-technologies/symba/actions/runs/34763666367) | Coalesced worker status writes | 499.76/sec | 40.48 ms | All nightly gates passed |
 
-`jobs_archive` was created with `LIKE jobs INCLUDING DEFAULTS`, which does not copy the hot table's primary-key index. `record_event.sql` resolves both tenant and context through `jobs_all` after every completion, producing two sequential archive scans per job. This grows with historical rows and saturates the completion pool even when submission itself is cheap. The SSE poller's tenant-scoped latest-ID lookup also lacked a matching index.
-
-Append-only migration `V011__archive_lookup_indexes.sql` adds the partition-parent `(id)` index and the ledger `(tenant, id)` index. The regression test executes the real audit INSERT with `EXPLAIN ANALYZE` over 50,000 archived jobs and rejects sequential archive scans while verifying tenant/context attribution. Existing migrations, transaction durability and audit writes are preserved.
-
-Deployment note: this migration builds indexes using PostgreSQL's standard blocking index creation on the partitioned parents. For a large existing archive, schedule a maintenance window and budget disk space; do not apply it during peak writes or edit already-applied migration checksums. The engine does not run migrations itself.
-
-The indexed cloud rerun (`34762507647`) measured 495.20 submissions/sec and p95 45.38 ms. Its p99 failure was concentrated in the first three startup seconds; subsequent one-second p95 measurements were mostly 12–36 ms. This distinguishes cold startup from sustained throughput. The single synthetic worker also did not drain 500/s, so the benchmark now starts four real worker processes with 64 slots each (the same total capacity of 256), verifies registration, warms 500 jobs and requires successful drain before measuring. Warm-up metrics are kept out of the k6 HTTP summaries; the busy claim test subtracts its initial cumulative histogram and requires at least 99% of the expected 12,000 iterations and claims. It fails on a restart/reset or an undrained preceding phase. These are explicit sustained-load measurement preconditions, not relaxed percentile targets; cold-start latency remains a separate observed limitation.
-
-Worker capacity updates were also producing a synchronous read-model database transaction for every slot frame. Capacity accounting still updates immediately in memory, but bursty operator-status writes are now coalesced to at most once per second per connected worker. Changes to capabilities/capacity, reconnects and the transition to fully idle persist immediately; idle heartbeat frames continue to refresh liveness. This reduces status-write contention without weakening job durability, lease accounting or tenant isolation. A burst/idle/heartbeat regression test and the real worker read-model tests cover this contract.
+Earlier failed runs were not committed as baselines. Local profiling helped isolate costs but was not substituted for the hosted CI measurement.
