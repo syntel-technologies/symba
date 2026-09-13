@@ -58,8 +58,16 @@ def test_engine_image_uses_only_locked_python_resolution() -> None:
     assert "COPY --from=build --chown=symba:symba /app /app" in runtime_stage
 
     manifest = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert manifest["dependency-groups"]["codegen"] == ["grpcio-tools==1.82.1"]
-    assert manifest["build-system"]["requires"] == ["hatchling==1.32.0"]
+    # Enforce reproducible, matching compilers without freezing a historical release.
+    codegen = manifest["dependency-groups"]["codegen"]
+    assert len(codegen) == 1
+    compiler = re.fullmatch(r"grpcio-tools==([0-9]+\.[0-9]+\.[0-9]+)", codegen[0])
+    assert compiler is not None
+    assert codegen[0] in manifest["project"]["optional-dependencies"]["dev"]
+    assert f"grpcio=={compiler.group(1)}" in manifest["project"]["dependencies"]
+    build_requirements = manifest["build-system"]["requires"]
+    assert len(build_requirements) == 1
+    assert re.fullmatch(r"hatchling==[0-9]+\.[0-9]+\.[0-9]+", build_requirements[0])
 
 
 def test_frontend_image_uses_committed_npm_lock() -> None:
@@ -277,7 +285,7 @@ def test_production_postgres_separates_admin_migration_and_runtime_roles() -> No
 
 def test_flyway_migrations_are_baked_into_the_release_image() -> None:
     dockerfile = _assert_digest_pinned_dockerfile(ROOT / "Dockerfile.flyway")
-    assert "flyway/flyway:12.0.1@sha256:" in dockerfile
+    assert re.search(r"^FROM flyway/flyway:[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}$", dockerfile, re.M)
     assert "COPY flyway.toml /opt/symba/flyway/flyway.toml" in dockerfile
     assert "COPY database/symba/ /opt/symba/flyway/sql/symba/" in dockerfile
     assert "find /opt/symba/flyway -type d -exec chmod 0555" in dockerfile
@@ -327,7 +335,7 @@ def test_production_overlay_statically_locks_runtime_identities_and_filesystems(
     assert 'restart: "no"' in preflight
 
     preflight_image = _assert_digest_pinned_dockerfile(ROOT / "Dockerfile.tls-preflight")
-    assert "alpine/openssl:3.5.4@sha256:" in preflight_image
+    assert re.search(r"^FROM alpine/openssl:[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}$", preflight_image, re.M)
     assert 'ENTRYPOINT ["/usr/local/bin/symba-runtime-preflight"]' in preflight_image
 
     preflight_script = (ROOT / "scripts" / "tls" / "preflight.sh").read_text(encoding="utf-8")
