@@ -29,6 +29,7 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: ${{ env.UV_VERSION }}
+      - run: uv lock --check
       - run: uv sync --frozen --extra dev --python ${{ env.PYTHON_VERSION }}
       - run: make proto
       - name: ruff lint

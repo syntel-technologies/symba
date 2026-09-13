@@ -6,9 +6,7 @@
 name = "symba"
 description = "Symba job execution engine"
 environment = "development"   # development | testing | production
-version_major = "0"
-version_minor = "1"
-version_patch = "0"
+# Version defaults come from the installed release metadata.
 
 # ===== Transports =====
 [server]

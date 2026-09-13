@@ -1,72 +1,135 @@
-# Release pipeline. Cuts on a SemVer tag: build+push the
-# multi-arch engine image to GHCR, then attach the migration bundle + changelog to
-# the GitHub Release. The tag itself is the trigger — CI (ci.yml) must already be
-# green on the commit being tagged; this workflow does not re-run the full gate.
-name: release
-
+name: Release
 on:
   push:
-    tags:
-      - "v[0-9]+.[0-9]+.[0-9]+" # vMAJOR.MINOR.PATCH only
-
+    tags: ['v*']
 permissions:
-  contents: write # create the GitHub Release + upload assets
-  packages: write # push the image to GHCR
-
+  contents: read
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  image:
-    # Multi-arch engine image -> ghcr.io/<owner>/symba:<tag> (+ :latest).
+  validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: docker/setup-qemu-action@v3 # arm64 emulation for the cross build
+        with:
+          fetch-depth: 0
+      - name: Require a stable version from reviewed main history
+        run: |
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          python3 - <<'PYCODE'
+          import os, tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path('pyproject.toml').read_text())['project']['version']
+          assert os.environ['GITHUB_REF_NAME'] == f'v{version}', 'Tag/package version mismatch'
+          PYCODE
+      - name: Require the reviewed changelog release
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const {data: release} = await github.rest.repos.getReleaseByTag({...context.repo, tag: context.ref.replace('refs/tags/', '')});
+            if (release.draft || release.prerelease || !release.body) core.setFailed('A published stable release with reviewed notes is required.');
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  images:
+    needs: [validate, ci]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {image: symba, context: '.', file: Dockerfile}
+          - {image: symba-frontend, context: frontend, file: frontend/Dockerfile}
+          - {image: symba-flyway, context: '.', file: Dockerfile.flyway}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - name: log in to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: image metadata (tags + labels)
-        id: meta
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=semver,pattern=v{{version}}
-            type=raw,value=latest,enable={{is_default_branch}}
-      - name: build & push (amd64 + arm64)
+      - name: Build the versioned image
+        id: image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: .
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  github-release:
-    # Migration bundle (append-only SQL) + auto changelog attached to the Release.
+          tags: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ github.ref_name }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+          build-args: |
+            KNOR_RELEASE_ID=${{ github.ref_name }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+      - name: Record immutable image digest
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PYCODE'
+          import json, os
+          from pathlib import Path
+          Path('image.json').write_text(json.dumps({key.lower(): os.environ[key] for key in ['IMAGE', 'DIGEST', 'TAG']}, indent=2) + '\n')
+          PYCODE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: digest-${{ matrix.image }}
+          path: image.json
+  assets:
+    needs: images
     runs-on: ubuntu-latest
-    needs: image
+    timeout-minutes: 5
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          fetch-depth: 0 # full history for the changelog
-      - name: bundle the append-only migrations
+          pattern: digest-*
+          path: image-digests
+      - name: Assemble release inventory and migration bundle
         run: |
-          tar -czf symba-migrations-${{ github.ref_name }}.tar.gz -C database symba
-      - name: create the GitHub Release
-        uses: softprops/action-gh-release@v2
+          mkdir release-assets
+          tar --sort=name --mtime="@$(git show -s --format=%ct HEAD)" --owner=0 --group=0 --numeric-owner -czf "release-assets/symba-migrations-$GITHUB_REF_NAME.tar.gz" -C database symba
+          python3 - <<'PYCODE'
+          import json, os
+          from pathlib import Path
+          images = [json.loads(p.read_text()) for p in sorted(Path('image-digests').glob('*/image.json'))]
+          assert len(images) == 3, 'Missing release image'
+          manifest = {'version': os.environ['GITHUB_REF_NAME'], 'revision': os.environ['GITHUB_SHA'], 'images': images}
+          Path('release-assets/images.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          PYCODE
+          (cd release-assets && sha256sum * > SHA256SUMS)
+      - name: Attach verified artifacts to the existing release
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
-          generate_release_notes: true # changelog from merged PRs since the last tag
-          files: |
-            symba-migrations-${{ github.ref_name }}.tar.gz
-          body: |
-            Engine image: `ghcr.io/${{ github.repository }}:${{ github.ref_name }}`
-            (multi-arch amd64/arm64).
-
-            Wire protocol: engine `MAJOR.MINOR` — see the compatibility matrix in the
-            README. DB migrations are append-only; apply the attached bundle with Flyway
-            (or the built-in runner) BEFORE starting the new engine.
+          script: |
+            const fs = require('node:fs');
+            const {data: release} = await github.rest.repos.getReleaseByTag({...context.repo, tag: context.ref.replace('refs/tags/', '')});
+            const {data: assets} = await github.rest.repos.listReleaseAssets({...context.repo, release_id: release.id});
+            for (const name of fs.readdirSync('release-assets')) {
+              const data = fs.readFileSync(`release-assets/${name}`);
+              const existing = assets.find(asset => asset.name === name);
+              if (existing) {
+                const prior = await github.rest.repos.getReleaseAsset({...context.repo, asset_id: existing.id, headers: {accept: 'application/octet-stream'}});
+                if (!Buffer.from(prior.data).equals(data)) throw new Error(`Refusing to replace different release asset ${name}`);
+                continue;
+              }
+              await github.rest.repos.uploadReleaseAsset({...context.repo, release_id: release.id, name, data});
+            }

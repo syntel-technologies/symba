@@ -22,14 +22,16 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
+from symba import __version__
+
 
 class AppConfig(BaseModel):
     name: str = "symba"
     description: str = "Symba job execution engine"
     environment: str = "development"  # development | testing | production
-    version_major: str = "0"
-    version_minor: str = "1"
-    version_patch: str = "0"
+    version_major: str = __version__.split(".")[0]
+    version_minor: str = __version__.split(".")[1]
+    version_patch: str = __version__.split(".")[2]
 
 
 class ServerConfig(BaseModel):
