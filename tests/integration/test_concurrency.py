@@ -88,12 +88,8 @@ async def test_claim_uses_exact_remaining_group_capacity(db: asyncpg.Connection)
     assert len(claimed) == 2
     assert {job.id for job in claimed} == {ids_by_priority[p] for p in (16, 17)}
     assert await h.group_running(db, "default", "provider", "provider.call") == 4
-    assert await db.fetchval(
-        "SELECT count(*) FROM jobs WHERE state='running' AND group_key='provider'"
-    ) == 4
-    assert await db.fetchval(
-        "SELECT count(*) FROM jobs WHERE state='queued' AND group_key='provider'"
-    ) == 16
+    assert await db.fetchval("SELECT count(*) FROM jobs WHERE state='running' AND group_key='provider'") == 4
+    assert await db.fetchval("SELECT count(*) FROM jobs WHERE state='queued' AND group_key='provider'") == 16
 
 
 # --------------------------------------------------------------------------- #
@@ -165,14 +161,18 @@ async def test_concurrent_group_claims_hold_exact_cap(migrated_pool: asyncpg.Poo
     assert len(ids) == len(set(ids)) == 4
     async with migrated_pool.acquire() as verifier:
         assert await h.group_running(verifier, "default", "provider", "provider.call") == 4
-        assert await verifier.fetchval(
-            "SELECT count(*) FROM jobs WHERE state='running' "
-            "AND group_key='provider' AND task_name='provider.call'"
-        ) == 4
-        assert await verifier.fetchval(
-            "SELECT count(*) FROM jobs WHERE state='queued' "
-            "AND group_key='provider' AND task_name='provider.call'"
-        ) == 60
+        assert (
+            await verifier.fetchval(
+                "SELECT count(*) FROM jobs WHERE state='running' AND group_key='provider' AND task_name='provider.call'"
+            )
+            == 4
+        )
+        assert (
+            await verifier.fetchval(
+                "SELECT count(*) FROM jobs WHERE state='queued' AND group_key='provider' AND task_name='provider.call'"
+            )
+            == 60
+        )
 
 
 # --------------------------------------------------------------------------- #

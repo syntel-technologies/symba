@@ -9,6 +9,9 @@ on:
     - cron: "0 3 * * *" # 03:00 UTC daily
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+
 env:
   UV_VERSION: "0.11"
   PYTHON_VERSION: "3.13"
@@ -18,6 +21,7 @@ jobs:
     # Scenarios 1-2: crash convergence + effect-once. Run against a real
     # Postgres 18 exactly like the L2 job.
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:18.1
@@ -32,42 +36,58 @@ jobs:
     env:
       SYMBA_POSTGRES__DSN: postgresql://symba:symba@localhost:5432/symba
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: ${{ env.UV_VERSION }}
-      - run: uv python install ${{ env.PYTHON_VERSION }}
-      - run: uv pip install --system -e ".[dev]"
+      - run: uv sync --frozen --extra dev --python ${{ env.PYTHON_VERSION }}
+      - run: make proto
       - name: L5 chaos scenarios 1-2
-        run: pytest -m l5 -q
+        run: uv run --no-sync pytest -m l5 -q
       - name: L6 dispatcher latency floor (worker-free, DB-clock)
-        run: pytest -m l6 -q
+        run: uv run --no-sync pytest -m l6 -q
 
   load-l6:
     # Submit-throughput baseline. Brings the full stack
     # up via compose, warms it, runs k6 v2, and compares against the committed baseline.
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv sync --frozen --extra dev --python ${{ env.PYTHON_VERSION }}
+      - run: make proto
       - name: bring the stack up (engine + PG18 + flyway)
-        run: docker compose up -d --wait
+        run: docker compose up --build -d --wait
       - name: install k6 v2
         run: |
           curl -fsSL https://github.com/grafana/k6/releases/download/v2.0.0/k6-v2.0.0-linux-amd64.tar.gz \
             | tar -xz --strip-components=1 -C /usr/local/bin k6-v2.0.0-linux-amd64/k6
           k6 version
+      - name: Start real echo worker
+        run: |
+          uv run --no-sync python tools/ci_load_worker.py > /tmp/ci-load-worker.log 2>&1 &
+          echo "$!" > /tmp/ci-load-worker.pid
       - name: k6 submit-throughput (thresholds are the pass/fail gate)
         run: k6 run -e SYMBA_URL=http://localhost:8080 tests/load/submit_throughput.js
       - name: k6 ready-to-claim p95 (busy-system scenario, target < 150ms)
         run: k6 run -e SYMBA_URL=http://localhost:8080 tests/load/ready_to_claim.js
       - name: regression gate vs committed baseline (>20% drop fails)
-        run: python tools/load_regression_gate.py
+        run: uv run --no-sync python tools/load_regression_gate.py
       - name: upload run summaries
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: k6-summaries
           path: tests/load/baseline/*.summary.json
       - name: engine logs on failure
         if: failure()
-        run: docker compose logs engine
+        run: docker compose logs symba-engine
+      - name: Worker diagnostics
+        if: failure()
+        run: cat /tmp/ci-load-worker.log
+      - name: Stop isolated CI stack
+        if: always()
+        run: docker compose down --volumes

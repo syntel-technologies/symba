@@ -75,3 +75,11 @@ def test_retry_after_rejects_non_finite_or_unbounded_values() -> None:
     assert normalize_retry_after(-1) is None
     assert normalize_retry_after(86_401) is None
     assert normalize_retry_after(30) == 30.0
+
+
+def test_retry_hint_rejects_strings_and_booleans():
+    from symba.core.failure import normalize_retry_after
+
+    assert normalize_retry_after("12") is None
+    assert normalize_retry_after(True) is None
+    assert normalize_retry_after(None) is None

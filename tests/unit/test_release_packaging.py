@@ -115,10 +115,7 @@ def test_compose_wires_release_inputs_and_production_requires_them() -> None:
     for service_name in ("symba-flyway", "symba-engine", "symba-frontend"):
         service = _compose_service_block(compose, service_name)
         assert "KNOR_RELEASE_ID: ${KNOR_RELEASE_ID:-development}" in service
-        assert (
-            "KNOR_RELEASE_MANIFEST_SHA256: "
-            "${KNOR_RELEASE_MANIFEST_SHA256:-unreleased}"
-        ) in service
+        assert ("KNOR_RELEASE_MANIFEST_SHA256: ${KNOR_RELEASE_MANIFEST_SHA256:-unreleased}") in service
 
     production = (ROOT / "docker-compose.production.yml").read_text(encoding="utf-8")
     for service_name in (
@@ -167,10 +164,7 @@ def test_production_overlay_requires_auth_database_and_tls_secrets() -> None:
     assert "SYMBA_GRPC_TLS_EXPECTED_CERT_SHA256 must be set for production" in production
     assert "SYMBA_GRPC_TLS_EXPECTED_CA_SHA256 must be set for production" in production
     assert "SYMBA_GRPC_TLS_MIN_REMAINING_SECONDS must be set for production" in production
-    suffix = (
-        "${KNOR_RELEASE_MANIFEST_SHA256:?"
-        "KNOR_RELEASE_MANIFEST_SHA256 must be set for production}"
-    )
+    suffix = "${KNOR_RELEASE_MANIFEST_SHA256:?KNOR_RELEASE_MANIFEST_SHA256 must be set for production}"
     assert f"image: symba-postgres:{suffix}" in production
     assert f"image: symba-flyway:{suffix}" in production
     assert f"image: symba-tls-preflight:{suffix}" in production
@@ -186,14 +180,12 @@ def test_production_overlay_requires_authenticated_ephemeral_redis() -> None:
     assert "--save ''" in redis
     assert 'REDISCLI_AUTH="$$REDIS_PASSWORD"' in redis
 
-    preflight_script = (ROOT / "scripts" / "tls" / "preflight.sh").read_text(
-        encoding="utf-8"
-    )
-    assert '${#SYMBA_REDIS_PASSWORD}' in preflight_script
-    assert '${#SYMBA_DEV_TOKEN}' in preflight_script
-    assert '${#SYMBA_POSTGRES_ADMIN_PASSWORD}' in preflight_script
-    assert '${#SYMBA_POSTGRES_MIGRATION_PASSWORD}' in preflight_script
-    assert '${#SYMBA_POSTGRES_RUNTIME_PASSWORD}' in preflight_script
+    preflight_script = (ROOT / "scripts" / "tls" / "preflight.sh").read_text(encoding="utf-8")
+    assert "${#SYMBA_REDIS_PASSWORD}" in preflight_script
+    assert "${#SYMBA_DEV_TOKEN}" in preflight_script
+    assert "${#SYMBA_POSTGRES_ADMIN_PASSWORD}" in preflight_script
+    assert "${#SYMBA_POSTGRES_MIGRATION_PASSWORD}" in preflight_script
+    assert "${#SYMBA_POSTGRES_RUNTIME_PASSWORD}" in preflight_script
     assert "*[!A-Za-z0-9_-]*" in preflight_script
     assert '"$SYMBA_REDIS_PASSWORD" != "$SYMBA_DEV_TOKEN"' in preflight_script
 
@@ -219,16 +211,12 @@ def test_production_postgres_separates_admin_migration_and_runtime_roles() -> No
     assert 'ENTRYPOINT ["/usr/local/bin/symba-postgres-entrypoint"]' in dockerfile
     assert 'CMD ["postgres"]' in dockerfile
 
-    entrypoint = (ROOT / "scripts" / "postgres" / "entrypoint.sh").read_text(
-        encoding="utf-8"
-    )
+    entrypoint = (ROOT / "scripts" / "postgres" / "entrypoint.sh").read_text(encoding="utf-8")
     assert "/usr/local/bin/symba-verify-release" in entrypoint
     assert "/usr/local/bin/symba-assert-postgres-contract" in entrypoint
     assert 'exec /usr/local/bin/docker-entrypoint.sh "$@"' in entrypoint
 
-    contract = (ROOT / "scripts" / "postgres" / "assert_contract.sh").read_text(
-        encoding="utf-8"
-    )
+    contract = (ROOT / "scripts" / "postgres" / "assert_contract.sh").read_text(encoding="utf-8")
     assert "database_secret_too_short" in contract
     assert "database_secrets_not_independent" in contract
     assert '"${POSTGRES_USER:-}" = "postgres"' in contract
@@ -236,9 +224,7 @@ def test_production_postgres_separates_admin_migration_and_runtime_roles() -> No
     assert "--auth-host=scram-sha-256 --auth-local=peer" in contract
     assert '"${POSTGRES_HOST_AUTH_METHOD:-}" = "scram-sha-256"' in contract
 
-    init = (ROOT / "scripts" / "postgres" / "init_roles.sh").read_text(
-        encoding="utf-8"
-    )
+    init = (ROOT / "scripts" / "postgres" / "init_roles.sh").read_text(encoding="utf-8")
     for role in ("symba_migrator", "symba_runtime"):
         assert role in init
     assert "/usr/local/bin/symba-assert-postgres-contract" in init
@@ -260,16 +246,14 @@ def test_production_postgres_separates_admin_migration_and_runtime_roles() -> No
     assert "\\getenv migration_password" in init
     assert "\\getenv runtime_password" in init
 
-    hba = (ROOT / "scripts" / "postgres" / "harden_hba.sh").read_text(
-        encoding="utf-8"
-    )
+    hba = (ROOT / "scripts" / "postgres" / "harden_hba.sh").read_text(encoding="utf-8")
     assert "host all postgres all reject" in hba
     assert "host replication postgres all reject" in hba
     assert "generic_scram_rule_invalid" in hba
     assert "local_peer_rule_invalid" in hba
     assert "local_replication_peer_rule_invalid" in hba
     assert "loopback_scram_rules_invalid" in hba
-    assert "mktemp \"$PGDATA/pg_hba.conf.symba.XXXXXX\"" in hba
+    assert 'mktemp "$PGDATA/pg_hba.conf.symba.XXXXXX"' in hba
     assert 'mv -f "$hba_tmp" "$hba"' in hba
     assert "sed -i" not in hba
 
@@ -346,9 +330,7 @@ def test_production_overlay_statically_locks_runtime_identities_and_filesystems(
     assert "alpine/openssl:3.5.4@sha256:" in preflight_image
     assert 'ENTRYPOINT ["/usr/local/bin/symba-runtime-preflight"]' in preflight_image
 
-    preflight_script = (ROOT / "scripts" / "tls" / "preflight.sh").read_text(
-        encoding="utf-8"
-    )
+    preflight_script = (ROOT / "scripts" / "tls" / "preflight.sh").read_text(encoding="utf-8")
     for contract in (
         "tls_certificate_private_key_mismatch",
         "tls_certificate_fingerprint_mismatch",
@@ -437,15 +419,11 @@ def test_production_overlay_renders_immutable_nonroot_runtime_contracts(
     expected_runtime = {
         "symba-flyway": (
             "10001:10001",
-            [
-                "/tmp:rw,noexec,nosuid,nodev,size=256m,mode=1770,uid=10001,gid=10001"
-            ],
+            ["/tmp:rw,noexec,nosuid,nodev,size=256m,mode=1770,uid=10001,gid=10001"],
         ),
         "symba-engine": (
             "10001:10001",
-            [
-                "/tmp:rw,noexec,nosuid,nodev,size=256m,mode=1770,uid=10001,gid=10001"
-            ],
+            ["/tmp:rw,noexec,nosuid,nodev,size=256m,mode=1770,uid=10001,gid=10001"],
         ),
         "symba-frontend": (
             "101:101",
@@ -465,18 +443,24 @@ def test_production_overlay_renders_immutable_nonroot_runtime_contracts(
         assert service["cap_drop"] == ["ALL"]
         assert service["security_opt"] == ["no-new-privileges:true"]
 
-    assert services["symba-flyway"]["environment"] | {
-        "HOME": "/tmp",
-        "XDG_CACHE_HOME": "/tmp/.cache",
-    } == services["symba-flyway"]["environment"]
-    assert services["symba-engine"]["environment"] | {
-        "HOME": "/tmp",
-        "XDG_CACHE_HOME": "/tmp/.cache",
-        "PYTHONDONTWRITEBYTECODE": "1",
-    } == services["symba-engine"]["environment"]
-    assert services["symba-redis"]["environment"]["REDIS_PASSWORD"] == (
-        "test-redis-password-012345678901"
+    assert (
+        services["symba-flyway"]["environment"]
+        | {
+            "HOME": "/tmp",
+            "XDG_CACHE_HOME": "/tmp/.cache",
+        }
+        == services["symba-flyway"]["environment"]
     )
+    assert (
+        services["symba-engine"]["environment"]
+        | {
+            "HOME": "/tmp",
+            "XDG_CACHE_HOME": "/tmp/.cache",
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+        == services["symba-engine"]["environment"]
+    )
+    assert services["symba-redis"]["environment"]["REDIS_PASSWORD"] == ("test-redis-password-012345678901")
     assert "--requirepass" in services["symba-redis"]["command"][2]
     assert services["symba-redis"]["healthcheck"]["test"] == [
         "CMD-SHELL",
@@ -487,9 +471,7 @@ def test_production_overlay_renders_immutable_nonroot_runtime_contracts(
     assert services["symba-flyway"]["environment"]["FLYWAY_USER"] == "symba_migrator"
     assert services["symba-flyway"]["image"] == f"symba-flyway:{'a' * 64}"
     assert "volumes" not in services["symba-flyway"]
-    assert services["symba-engine"]["environment"]["SYMBA_POSTGRES__USER"] == (
-        "symba_runtime"
-    )
+    assert services["symba-engine"]["environment"]["SYMBA_POSTGRES__USER"] == ("symba_runtime")
     assert all(
         mount["read_only"]
         for mount in services["symba-engine"]["volumes"]
@@ -515,18 +497,10 @@ def test_production_overlay_renders_immutable_nonroot_runtime_contracts(
     assert tls_preflight["restart"] == "no"
     assert "ports" not in tls_preflight
     assert all(mount["read_only"] for mount in tls_preflight["volumes"])
-    assert tls_preflight["tmpfs"] == [
-        "/tmp:rw,noexec,nosuid,nodev,size=1m,mode=1770,uid=10001,gid=10001"
-    ]
-    assert tls_preflight["environment"]["SYMBA_TLS_KEY_EXPECTED_OWNER"] == (
-        "10001:10001"
-    )
-    assert tls_preflight["environment"]["SYMBA_GRPC_TLS_EXPECTED_DNS_NAME"] == (
-        "symba.example.test"
-    )
-    assert tls_preflight["environment"]["SYMBA_GRPC_TLS_EXPECTED_IP"] == (
-        "100.64.0.4"
-    )
+    assert tls_preflight["tmpfs"] == ["/tmp:rw,noexec,nosuid,nodev,size=1m,mode=1770,uid=10001,gid=10001"]
+    assert tls_preflight["environment"]["SYMBA_TLS_KEY_EXPECTED_OWNER"] == ("10001:10001")
+    assert tls_preflight["environment"]["SYMBA_GRPC_TLS_EXPECTED_DNS_NAME"] == ("symba.example.test")
+    assert tls_preflight["environment"]["SYMBA_GRPC_TLS_EXPECTED_IP"] == ("100.64.0.4")
     assert {mount["target"] for mount in tls_preflight["volumes"]} == {
         "/run/secrets/symba/server.crt",
         "/run/secrets/symba/server.key",

@@ -427,8 +427,7 @@ async def test_gate_all_success_dead_child_resolves_to_failure_once(
     )
 
     gate = await db.fetchrow(
-        "SELECT completed_children, succeeded_children, failed_children, fired_at "
-        "FROM gates WHERE id=$1",
+        "SELECT completed_children, succeeded_children, failed_children, fired_at FROM gates WHERE id=$1",
         gate_id,
     )
     assert gate is not None
@@ -437,9 +436,7 @@ async def test_gate_all_success_dead_child_resolves_to_failure_once(
     assert gate["failed_children"] == 1
     assert gate["fired_at"] is not None
     assert await _reduce_jobs(db) == []
-    failure_jobs = await db.fetch(
-        "SELECT state, ctx_id, group_key, payload FROM jobs WHERE task_name='reduce_failed'"
-    )
+    failure_jobs = await db.fetch("SELECT state, ctx_id, group_key, payload FROM jobs WHERE task_name='reduce_failed'")
     assert len(failure_jobs) == 1
     assert failure_jobs[0]["state"] == "queued"
     assert failure_jobs[0]["group_key"] == gate_id

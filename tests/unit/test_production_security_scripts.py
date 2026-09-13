@@ -31,9 +31,7 @@ def _run_shell(
 def _write_provenance(directory: Path, *, manifest: str = FINAL_MANIFEST) -> None:
     directory.mkdir()
     (directory / "release-id").write_text("release-2026-09-02\n", encoding="utf-8")
-    (directory / "release-manifest-sha256").write_text(
-        f"{manifest}\n", encoding="utf-8"
-    )
+    (directory / "release-manifest-sha256").write_text(f"{manifest}\n", encoding="utf-8")
 
 
 def _postgres_environment(pgdata: Path | None = None) -> dict[str, str]:
@@ -43,9 +41,7 @@ def _postgres_environment(pgdata: Path | None = None) -> dict[str, str]:
         "POSTGRES_INITDB_ARGS": "--auth-host=scram-sha-256 --auth-local=peer",
         "POSTGRES_HOST_AUTH_METHOD": "scram-sha-256",
         "POSTGRES_PASSWORD": "admin-password-01234567890123456789",
-        "SYMBA_POSTGRES_MIGRATION_PASSWORD": (
-            "migration-password-0123456789012345"
-        ),
+        "SYMBA_POSTGRES_MIGRATION_PASSWORD": ("migration-password-0123456789012345"),
         "SYMBA_POSTGRES_RUNTIME_PASSWORD": "runtime-password-012345678901234567",
     }
     if pgdata is not None:
@@ -164,9 +160,7 @@ def test_hba_hardener_atomically_prefixes_exact_bootstrap_rejects(
 
     assert completed.returncode == 0, completed.stderr
     assert hba.read_text(encoding="utf-8") == (
-        "host replication postgres all reject\n"
-        "host all postgres all reject\n"
-        f"{original}"
+        f"host replication postgres all reject\nhost all postgres all reject\n{original}"
     )
     assert stat.S_IMODE(hba.stat().st_mode) == 0o640
     assert list(pgdata.glob("pg_hba.conf.symba.*")) == []
