@@ -72,16 +72,21 @@ jobs:
             uv run --no-sync python tools/ci_load_worker.py 127.0.0.1:7233 "ci-load-echo-$worker" 64 > "/tmp/ci-load-worker-$worker.log" 2>&1 &
           done
       - name: Warm connections and require successful work before measuring
+        id: warmup
         run: uv run --no-sync python tools/ci_load_prepare.py http://localhost:8080
       - name: Capture benchmark resource usage
         run: |
           docker stats --format '{{json .}}' > /tmp/load-docker-stats.jsonl &
           vmstat 1 > /tmp/load-vmstat.txt &
       - name: k6 submit-throughput (thresholds are the pass/fail gate)
+        id: submit
         run: k6 run --out json=/tmp/load-submit.json.gz -e SYMBA_URL=http://localhost:8080 tests/load/submit_throughput.js
       - name: Require the submission phase to drain
+        id: drain
+        if: ${{ !cancelled() && steps.warmup.outcome == 'success' }}
         run: uv run --no-sync python tools/ci_load_prepare.py http://localhost:8080 --drain-only
       - name: k6 ready-to-claim p95 (busy-system scenario, target < 150ms)
+        if: ${{ !cancelled() && steps.drain.outcome == 'success' }}
         run: k6 run -e SYMBA_URL=http://localhost:8080 tests/load/ready_to_claim.js
       - name: regression gate vs committed baseline (>20% drop fails)
         run: uv run --no-sync python tools/load_regression_gate.py

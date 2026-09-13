@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from time import monotonic
 
 from symba.v1 import data_plane_pb2 as dp
 
@@ -50,6 +51,7 @@ class WorkerConn:
     # first Claim frame (at connect free_slots == total), so the fleet view can show
     # a real busy/total gauge instead of only "currently free".
     slots_total: int = 0
+    persisted_at: float = field(default=0.0, repr=False)
     # Bounded so a stalled worker cannot let assignments pile up unboundedly;
     # the matcher only assigns up to free_slots, so this never blocks in practice.
     queue: asyncio.Queue[dp.JobAssignment] = field(default_factory=lambda: asyncio.Queue(maxsize=1024))
@@ -115,6 +117,12 @@ class WorkerRegistry:
             if conn is None or (expected is not None and conn is not expected):
                 return False
             was_idle = conn.free_slots == 0
+            became_idle = free_slots == conn.slots_total and conn.free_slots != conn.slots_total
+            metadata_changed = (
+                free_slots > conn.slots_total
+                or (tags is not None and tags != conn.tags)
+                or (registered_tasks is not None and registered_tasks != conn.registered_tasks)
+            )
             conn.free_slots = free_slots
             # A worker may advertise more capacity than at connect (config reload);
             # slots_total is the high-water mark so slots_busy never goes negative.
@@ -126,16 +134,21 @@ class WorkerRegistry:
             if registered_tasks is not None:
                 conn.registered_tasks = registered_tasks
             snapshot = conn
+            persist = metadata_changed or became_idle or monotonic() - conn.persisted_at >= 1.0
         if was_idle and free_slots > 0:
             self.wake.set()
-        # Slot frames double as heartbeats: refresh the read model so last_seen
-        # tracks liveness and the busy/total gauge stays live.
-        await self._persist_upsert(snapshot)
+        # Capacity stays immediate in memory. Coalesce the operator read-model
+        # writes during bursts instead of doing a DB transaction per completion.
+        # Metadata and transition to fully idle persist immediately; heartbeat
+        # frames still refresh last_seen even when capacity has not changed.
+        if persist:
+            await self._persist_upsert(snapshot)
         return True
 
     async def _persist_upsert(self, conn: WorkerConn) -> None:
         if self._on_upsert is None:
             return
+        conn.persisted_at = monotonic()
         slots_busy = max(0, conn.slots_total - conn.free_slots)
         await self._on_upsert(
             conn.worker_id,

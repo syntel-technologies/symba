@@ -142,3 +142,35 @@ def test_claim_bad_total_label_falls_back_to_free_slots() -> None:
         labels={"symba.slots_total": "invalid"},
     )
     assert _slots_total(frame) == 9
+
+
+async def test_slot_bursts_keep_capacity_live_without_per_frame_database_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = 100.0
+    monkeypatch.setattr("symba.services.registry.monotonic", lambda: now)
+    writes: list[int] = []
+
+    async def persist(
+        worker_id: str, tags: list[str], tasks: list[str], labels: dict[str, str], total: int, busy: int
+    ) -> None:
+        writes.append(busy)
+
+    registry = WorkerRegistry(on_upsert=persist)
+    conn = WorkerConn(worker_id="burst", tags=frozenset(), free_slots=64, labels={})
+    await registry.register(conn)
+    for _ in range(100):
+        await registry.update_slots("burst", 32, expected=conn)
+    assert conn.free_slots == 32
+    assert writes == [0]
+
+    now += 1.0
+    await registry.update_slots("burst", 16, expected=conn)
+    assert writes == [0, 48]
+    await registry.update_slots("burst", 8, registered_tasks=frozenset({"new.task"}), expected=conn)
+    assert writes == [0, 48, 56]  # metadata changes are immediate
+    await registry.update_slots("burst", 64, expected=conn)
+    assert writes == [0, 48, 56, 0]  # completion of the burst immediately shows idle
+    now += 5.0
+    await registry.update_slots("burst", 64, expected=conn)
+    assert writes == [0, 48, 56, 0, 0]  # idle heartbeat still refreshes liveness
