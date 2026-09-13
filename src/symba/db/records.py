@@ -221,6 +221,7 @@ class WorkerRow:
 
     worker_id: str
     tags: list[str]
+    registered_tasks: list[str]
     labels: dict[str, Any]
     slots: int
     slots_busy: int

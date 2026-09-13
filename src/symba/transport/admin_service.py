@@ -78,6 +78,7 @@ def _worker_to_proto(row: WorkerRow) -> admin.Worker:
     worker = admin.Worker(
         worker_id=row.worker_id,
         tags=list(row.tags),
+        registered_tasks=list(row.registered_tasks),
         labels={k: str(v) for k, v in (row.labels or {}).items()},
         slots=row.slots,
         slots_busy=row.slots_busy,

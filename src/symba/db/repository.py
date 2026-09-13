@@ -852,6 +852,7 @@ async def list_workers(conn: asyncpg.Connection) -> list[WorkerRow]:
         WorkerRow(
             worker_id=r["worker_id"],
             tags=list(r["tags"]),
+            registered_tasks=list(r["registered_tasks"]),
             labels=r["labels"] or {},
             slots=r["slots"],
             slots_busy=r["slots_busy"],
@@ -867,12 +868,13 @@ async def worker_upsert(
     *,
     worker_id: str,
     tags: list[str],
+    registered_tasks: list[str],
     labels: dict[str, Any],
     slots: int,
     slots_busy: int,
 ) -> None:
     """Persist/refresh one live worker into the fleet read model."""
-    await conn.execute(Q.WORKER_UPSERT, worker_id, tags, labels, slots, slots_busy)
+    await conn.execute(Q.WORKER_UPSERT, worker_id, tags, registered_tasks, labels, slots, slots_busy)
 
 
 async def worker_delete(conn: asyncpg.Connection, *, worker_id: str) -> None:

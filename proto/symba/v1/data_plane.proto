@@ -40,6 +40,7 @@ message ClaimRequest {
   uint32 free_slots = 3;
   string sdk_version = 4;
   map<string, string> labels = 5;  // host, gpu model, region -- fleet view metadata
+  repeated string registered_tasks = 6;  // local handler names; observability only, never routing
 }
 
 message JobAssignment {

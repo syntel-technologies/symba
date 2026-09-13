@@ -130,3 +130,24 @@ async def test_upsert_and_list_rate_classes(admin_stub: admin_grpc.AdminServiceS
 async def test_list_workers_empty_ok(admin_stub: admin_grpc.AdminServiceStub) -> None:
     resp = await admin_stub.ListWorkers(admin.ListWorkersRequest())
     assert list(resp.workers) == []
+
+
+async def test_list_workers_exposes_registered_tasks(
+    admin_stub: admin_grpc.AdminServiceStub,
+    migrated_pool: asyncpg.Pool,
+) -> None:
+    async with migrated_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO workers (worker_id, tags, registered_tasks) VALUES ($1, $2, $3)",
+            "w-capabilities",
+            ["gpu"],
+            ["embed.batch", "parse.document"],
+        )
+    try:
+        response = await admin_stub.ListWorkers(admin.ListWorkersRequest())
+        worker = next(row for row in response.workers if row.worker_id == "w-capabilities")
+        assert list(worker.tags) == ["gpu"]
+        assert list(worker.registered_tasks) == ["embed.batch", "parse.document"]
+    finally:
+        async with migrated_pool.acquire() as conn:
+            await conn.execute("DELETE FROM workers WHERE worker_id=$1", "w-capabilities")

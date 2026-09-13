@@ -48,6 +48,7 @@ message Worker {
   uint32 slots_busy = 5;
   google.protobuf.Timestamp last_seen = 6;
   bool stale = 7;
+  repeated string registered_tasks = 8;
 }
 message ListWorkersRequest {}
 message ListWorkersResponse { repeated Worker workers = 1; }

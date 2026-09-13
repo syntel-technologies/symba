@@ -1,6 +1,6 @@
 """In-memory worker registry.
 
-    worker_id -> WorkerConn(tags, free_slots, assignment queue, labels)
+    worker_id -> WorkerConn(tags, registered_tasks, free_slots, assignment queue, labels)
 
 The matcher reads a snapshot of connected workers with free_slots > 0, claims
 jobs for them, and pushes JobAssignments onto each worker's queue; the Claim
@@ -30,9 +30,9 @@ from symba.v1 import data_plane_pb2 as dp
 # matching, but mirrors lifecycle changes into the `workers` read model so the
 # fleet view and connected-worker count survive across engines/restarts.
 # Injected so the registry keeps its pool-free dependency surface.
-#   upsert(worker_id, tags, labels, slots_total, slots_busy)
+#   upsert(worker_id, tags, registered_tasks, labels, slots_total, slots_busy)
 #   delete(worker_id)
-UpsertHook = Callable[[str, list[str], dict[str, str], int, int], Awaitable[None]]
+UpsertHook = Callable[[str, list[str], list[str], dict[str, str], int, int], Awaitable[None]]
 DeleteHook = Callable[[str], Awaitable[None]]
 
 
@@ -42,6 +42,9 @@ class WorkerConn:
     tags: frozenset[str]
     free_slots: int
     labels: dict[str, str]
+    # Handler inventory is operator metadata, not a routing input. Keeping it
+    # separate prevents the Fleet UI from presenting routing tags as capabilities.
+    registered_tasks: frozenset[str] = frozenset()
     # Total advertised capacity, fixed for the connection. free_slots decreases as
     # the matcher assigns; slots_busy = slots_total - free_slots. Captured from the
     # first Claim frame (at connect free_slots == total), so the fleet view can show
@@ -103,6 +106,7 @@ class WorkerRegistry:
         worker_id: str,
         free_slots: int,
         tags: frozenset[str] | None = None,
+        registered_tasks: frozenset[str] | None = None,
         *,
         expected: WorkerConn | None = None,
     ) -> bool:
@@ -119,6 +123,8 @@ class WorkerRegistry:
                 self._known_slots_total[worker_id] = conn.slots_total
             if tags is not None:
                 conn.tags = tags
+            if registered_tasks is not None:
+                conn.registered_tasks = registered_tasks
             snapshot = conn
         if was_idle and free_slots > 0:
             self.wake.set()
@@ -131,7 +137,14 @@ class WorkerRegistry:
         if self._on_upsert is None:
             return
         slots_busy = max(0, conn.slots_total - conn.free_slots)
-        await self._on_upsert(conn.worker_id, sorted(conn.tags), dict(conn.labels), conn.slots_total, slots_busy)
+        await self._on_upsert(
+            conn.worker_id,
+            sorted(conn.tags),
+            sorted(conn.registered_tasks),
+            dict(conn.labels),
+            conn.slots_total,
+            slots_busy,
+        )
 
     async def snapshot_available(self) -> list[WorkerConn]:
         """Workers with capacity right now. Returns the live objects (single loop,

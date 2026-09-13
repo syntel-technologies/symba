@@ -93,6 +93,7 @@ class WorkerServicer(dp_grpc.WorkerServiceServicer):
             tags=frozenset(first.tags),
             free_slots=first.free_slots,
             labels=dict(first.labels),
+            registered_tasks=frozenset(first.registered_tasks),
             # Reconnects can occur while jobs are still executing, so free_slots
             # is not a stable capacity value. New SDKs send the configured total
             # in a reserved label; old SDKs fall back to the registry high-water.
@@ -139,6 +140,7 @@ class WorkerServicer(dp_grpc.WorkerServiceServicer):
                     conn.worker_id,
                     frame.free_slots,
                     frozenset(frame.tags),
+                    frozenset(frame.registered_tasks),
                     expected=conn,
                 )
         except asyncio.CancelledError:

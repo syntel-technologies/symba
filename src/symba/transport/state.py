@@ -45,12 +45,25 @@ def _build_registry(pools: Pools) -> WorkerRegistry:
     not this table — is authoritative for matching.
     """
 
-    async def _upsert(worker_id: str, tags: list[str], labels: dict[str, Any], slots: int, slots_busy: int) -> None:
+    async def _upsert(
+        worker_id: str,
+        tags: list[str],
+        registered_tasks: list[str],
+        labels: dict[str, Any],
+        slots: int,
+        slots_busy: int,
+    ) -> None:
         try:
             async with pools.general.acquire() as pooled_connection:
                 conn = cast(asyncpg.Connection, pooled_connection)
                 await repo.worker_upsert(
-                    conn, worker_id=worker_id, tags=tags, labels=labels, slots=slots, slots_busy=slots_busy
+                    conn,
+                    worker_id=worker_id,
+                    tags=tags,
+                    registered_tasks=registered_tasks,
+                    labels=labels,
+                    slots=slots,
+                    slots_busy=slots_busy,
                 )
         except Exception:
             logger.error("[registry] Worker upsert failed", worker_id=worker_id, exc_info=True)

@@ -9,6 +9,6 @@
 --
 -- No parameters (the fleet is not tenant-scoped — a worker serves all tenants it is
 -- tagged for; per-tenant fleet views are a future concern).
-SELECT worker_id, tags, labels, slots, slots_busy, last_seen, stale
+SELECT worker_id, tags, registered_tasks, labels, slots, slots_busy, last_seen, stale
 FROM workers
 ORDER BY last_seen DESC;
