@@ -24,8 +24,9 @@ enter `symba-local-dev-token`. HTTP is on port 7300; workers connect on gRPC por
 7233 with the same token and tenant `default`.
 
 ```sh
+SYMBA_TOKEN=symba-local-dev-token
 curl --fail http://localhost:7300/v1/jobs \
-  -H 'Authorization: Bearer symba-local-dev-token' \
+  -H "Authorization: Bearer $SYMBA_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"tenant":"default","specs":[{"task_name":"demo.echo","payload":{"hello":"world"}}]}'
 ```

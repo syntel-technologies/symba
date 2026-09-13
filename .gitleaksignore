@@ -1,0 +1,4 @@
+# This exact historical finding is the public, fixed localhost quickstart token
+# symba-local-dev-token, also baked into compose.quickstart.yml. It is not a
+# Docker/GitHub credential. The current curl example uses a variable instead.
+60d90b033ce8f8f0d8a0ae33b0a30169855979a9:docs/docker.md:curl-auth-header:27
