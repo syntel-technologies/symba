@@ -21,7 +21,9 @@ role gating: --role=api|sweeper|all (default all) via SYMBA_SERVER__ROLES.
 from __future__ import annotations
 
 import asyncio
+import os
 import signal
+import sys
 
 from symba.config import load_config
 from symba.db.pool import create_pools
@@ -108,7 +110,16 @@ async def _run() -> None:
 
 
 def main() -> None:
-    asyncio.run(_run())
+    # Uvicorn runs inside the engine's shared loop, so its own "auto" setting
+    # cannot select uvloop for us. Use it for the whole HTTP/gRPC/DB runtime.
+    # Keep stdlib asyncio on unsupported platforms and in debug mode: uvloop
+    # 0.22.1 has a known Python 3.13/3.14 debug-stack finalization issue (#715).
+    if sys.platform != "win32" and sys.implementation.name == "cpython" and not os.getenv("PYTHONASYNCIODEBUG"):
+        import uvloop
+
+        asyncio.run(_run(), loop_factory=uvloop.new_event_loop)
+    else:
+        asyncio.run(_run())
 
 
 if __name__ == "__main__":
