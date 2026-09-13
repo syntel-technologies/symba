@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.4@sha256:9ba7531bd80fb0a858632727cf7a112fbfd19b17e94c4e84ced81e24ef1a0dbc
 
-FROM flyway/flyway:12.0.1@sha256:e1e18fa4f75cbffbbb9916c8aee462a8c30cca228283b17e0d0aabde6fd12ff8
+FROM flyway/flyway:13.6.0@sha256:fc19da2608baefbccba20b2fa1a1d23d3efbd67cae963f64a63e032bb421fcbb
 
 COPY flyway.toml /opt/symba/flyway/flyway.toml
 COPY database/symba/ /opt/symba/flyway/sql/symba/
