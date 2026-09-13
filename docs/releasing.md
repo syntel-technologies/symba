@@ -70,3 +70,22 @@ Database tests create a disposable PostgreSQL 18 container when no external DSN 
 
 `Release` builds amd64/arm64 images for `ghcr.io/syntel-technologies/symba`, `symba-frontend` and `symba-flyway`, each using the release tag. It attaches the SQL migration bundle, SHA256 checksums and `images.json` containing the exact image digests and git revision. Deploy by digest for reproducibility. Apply Flyway migrations before starting the matching engine; the engine does not self-migrate. GHCR packages may need their initial visibility set to public by an owner after the first publication. The engine is not published to PyPI. The SDK distribution is `syntel-symba`; its Python imports and CLI remain `symba`.
 
+
+## Dependency update reviews
+
+Dependabot proposes changes into `dev`; an open update PR is not a supported release.
+Compiler/runtime protobuf packages are grouped separately from general Python
+updates. Review generated-code changes and required runtime floors together; do
+not disable drift or minimum-dependency checks to accept a compiler upgrade.
+
+ESLint and its plugins update as one toolchain, as do Vite and its build plugins.
+Do not use `--force` or `--legacy-peer-deps` to bypass incompatible peer ranges.
+TypeScript major proposals are deferred while `openapi-typescript` declares `^5.x`;
+`typescript-eslint` also currently excludes TypeScript 7. Patch/minor updates stay
+enabled. Remove the scoped major ignore after both upstream tools support the new
+compiler, then verify strict types, lint, API generation, frontend tests and build.
+
+Release-contract tests verify digest pins, exact Python tool pins and agreement
+between code generation and runtime dependencies. They deliberately do not freeze
+historical patch versions in assertions; reviewed dependency upgrades must still
+preserve reproducible builds and pass their functional checks.
