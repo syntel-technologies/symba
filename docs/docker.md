@@ -50,8 +50,10 @@ docker compose -f compose.quickstart.yml up -d --wait
 ```
 
 `ghcr.io/syntel-technologies` is also supported as the image prefix. All three
-images must come from the same release. Published image tags include `v` and do
-not include a floating `latest` alias.
+images must come from the same release. Version tags include `v`. After release
+smoke checks pass, the highest stable release also receives a floating `latest`
+alias, so an untagged `docker pull synteltechnologies/symba` works. Keep version
+or digest pins in application deployments; `latest` changes between releases.
 
 ## Run the engine against an existing PostgreSQL 18 database
 
