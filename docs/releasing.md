@@ -17,7 +17,7 @@ After CI succeeds for a push to the current `main`, Release Please opens or upda
 
 - `fix` and `perf`: patch release; `feat`: minor release; `!` / `BREAKING CHANGE:`: major release. This configuration deliberately applies these rules even before 1.0. The initial version is 0.1.0. Pure maintenance commits do not force a release.
 - Review the proposed notes and compatibility impact. The bot never approves its own changes or bypasses rules. Enable auto-merge on the release PR if you want it merged once the required review and checks finish.
-- After that PR merges and main CI passes, Release Please creates the matching `vMAJOR.MINOR.PATCH` tag and GitHub Release. The tag starts `Release`, which checks tag/package agreement, ancestry in reviewed main history and the release notes, then reruns the complete CI workflow on the **tagged commit** before publishing artifacts.
+- After that PR merges and main CI passes, Release Please creates the matching `vMAJOR.MINOR.PATCH` tag and GitHub Release. The tag starts `Release`, which checks tag/package agreement, ancestry in reviewed main history and the release notes, then reruns the complete CI workflow on the **tagged commit** before publishing artifacts. Engine releases also rerun the full nightly performance suite; a green functional CI run cannot bypass a failing throughput/latency gate.
 - Release Please updates `uv.lock` along with the package version. Its TOML updater represents strings as tagged values; the JSONPath intentionally uses `@.name.value`. The migration dry run tested the pinned action's Release Please 17.3.0 implementation and `uv lock --check`. Revalidate this behavior when updating the action. The engine console's two npm version records and runtime version also move together. Wire protocol versions are independent compatibility declarations and are not blindly rewritten by packaging automation.
 - The bot opens a `main` → `dev` synchronization PR when needed. Merge it with a merge commit before the next promotion, preserving release metadata and avoiding conflicts. It never force-pushes `dev`.
 
@@ -39,7 +39,7 @@ No App subscription is required. These are public repositories, so standard GitH
 
 ## Dependency and security checks
 
-Dependabot sends grouped compatible dependency updates to `dev` weekly; major updates remain separately reviewable. GitHub also reports known vulnerabilities and security updates on the default branch. CodeQL, secret scanning and push protection cover the public repositories once configured. The nightly engine load suite is a separate performance signal, not a substitute for PR CI; never lower its thresholds merely to make it green.
+Dependabot sends grouped compatible dependency updates to `dev` weekly; major updates remain separately reviewable. GitHub also reports known vulnerabilities and security updates on the default branch. CodeQL, secret scanning and push protection cover the public repositories once configured. The nightly engine load suite is separate from PR CI and mandatory for engine artifact publication. Never lower its thresholds merely to make it green. See [the current performance finding](performance-release-blocker.md).
 
 ## Reproducing checks
 

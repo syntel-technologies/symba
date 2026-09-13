@@ -34,8 +34,11 @@ jobs:
   ci:
     uses: ./.github/workflows/ci.yml
 
+  performance:
+    uses: ./.github/workflows/nightly.yml
+
   images:
-    needs: [validate, ci]
+    needs: [validate, ci, performance]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:

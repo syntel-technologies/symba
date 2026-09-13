@@ -8,6 +8,7 @@ on:
   schedule:
     - cron: "0 3 * * *" # 03:00 UTC daily
   workflow_dispatch: {}
+  workflow_call: {}
 
 permissions:
   contents: read
@@ -83,7 +84,7 @@ jobs:
           path: tests/load/baseline/*.summary.json
       - name: engine logs on failure
         if: failure()
-        run: docker compose logs symba-engine
+        run: docker compose logs --tail=200 symba-engine
       - name: Worker diagnostics
         if: failure()
         run: cat /tmp/ci-load-worker.log
