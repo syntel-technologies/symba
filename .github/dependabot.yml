@@ -15,6 +15,9 @@ updates:
     target-branch: dev
     open-pull-requests-limit: 5
     groups:
+      grpc-toolchain:
+        patterns: ['grpcio*', 'protobuf']
+        update-types: [minor, patch]
       compatible-python:
         update-types: [minor, patch]
   - package-ecosystem: npm
@@ -22,7 +25,16 @@ updates:
     schedule:
       interval: weekly
     target-branch: dev
+    # openapi-typescript currently declares TypeScript ^5.x. Keep patch/minor
+    # fixes enabled; reconsider compiler majors when the generator supports them.
+    ignore:
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
     groups:
+      eslint-toolchain:
+        patterns: ['eslint', '@eslint/*', 'eslint-plugin-*', 'typescript-eslint']
+      vite-toolchain:
+        patterns: ['vite', '@vitejs/*', '@tailwindcss/vite', 'tailwindcss']
       compatible-frontend:
         update-types: [minor, patch]
   - package-ecosystem: docker
