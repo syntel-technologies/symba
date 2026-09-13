@@ -66,16 +66,21 @@ jobs:
           curl -fsSL https://github.com/grafana/k6/releases/download/v2.0.0/k6-v2.0.0-linux-amd64.tar.gz \
             | tar -xz --strip-components=1 -C /usr/local/bin k6-v2.0.0-linux-amd64/k6
           k6 version
-      - name: Start real echo worker
+      - name: Start the real echo worker fleet
         run: |
-          uv run --no-sync python tools/ci_load_worker.py > /tmp/ci-load-worker.log 2>&1 &
-          echo "$!" > /tmp/ci-load-worker.pid
+          for worker in 0 1 2 3; do
+            uv run --no-sync python tools/ci_load_worker.py 127.0.0.1:7233 "ci-load-echo-$worker" 64 > "/tmp/ci-load-worker-$worker.log" 2>&1 &
+          done
+      - name: Warm connections and require successful work before measuring
+        run: uv run --no-sync python tools/ci_load_prepare.py http://localhost:8080
       - name: Capture benchmark resource usage
         run: |
           docker stats --format '{{json .}}' > /tmp/load-docker-stats.jsonl &
           vmstat 1 > /tmp/load-vmstat.txt &
       - name: k6 submit-throughput (thresholds are the pass/fail gate)
         run: k6 run --out json=/tmp/load-submit.json.gz -e SYMBA_URL=http://localhost:8080 tests/load/submit_throughput.js
+      - name: Require the submission phase to drain
+        run: uv run --no-sync python tools/ci_load_prepare.py http://localhost:8080 --drain-only
       - name: k6 ready-to-claim p95 (busy-system scenario, target < 150ms)
         run: k6 run -e SYMBA_URL=http://localhost:8080 tests/load/ready_to_claim.js
       - name: regression gate vs committed baseline (>20% drop fails)
@@ -101,7 +106,7 @@ jobs:
         run: docker compose logs --tail=200 symba-engine
       - name: Worker diagnostics
         if: failure()
-        run: cat /tmp/ci-load-worker.log
+        run: cat /tmp/ci-load-worker-*.log
       - name: Stop isolated CI stack
         if: always()
         run: docker compose down --volumes

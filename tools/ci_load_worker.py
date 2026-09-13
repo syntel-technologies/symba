@@ -13,8 +13,7 @@ from symba.v1 import data_plane_pb2 as dp
 from symba.v1 import data_plane_pb2_grpc as rpc
 
 
-async def serve(target: str) -> None:
-    capacity = 256
+async def serve(target: str, worker_id: str = "ci-load-echo", capacity: int = 256) -> None:
     active = 0
     updates = asyncio.Event()
     updates.set()
@@ -30,7 +29,7 @@ async def serve(target: str) -> None:
             # a slow stream never replays an unbounded queue of stale capacity.
             free = capacity - active
             yield dp.ClaimRequest(
-                worker_id="ci-load-echo",
+                worker_id=worker_id,
                 free_slots=free,
                 sdk_version="0.1.0",
                 tags=["general"],
@@ -62,4 +61,13 @@ async def serve(target: str) -> None:
 
 if __name__ == "__main__":
     with contextlib.suppress(KeyboardInterrupt):
-        asyncio.run(serve(sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1:7233"))
+        import uvloop
+
+        asyncio.run(
+            serve(
+                sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1:7233",
+                sys.argv[2] if len(sys.argv) > 2 else "ci-load-echo",
+                int(sys.argv[3]) if len(sys.argv) > 3 else 256,
+            ),
+            loop_factory=uvloop.new_event_loop,
+        )
