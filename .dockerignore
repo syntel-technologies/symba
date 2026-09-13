@@ -1,0 +1,41 @@
+# Keep the engine build context limited to runtime inputs. The operator UI is
+# built from its own ./frontend context, and tests/tooling never enter the
+# Python engine image.
+.git
+.github
+.cursor
+.idea
+.vscode
+.venv
+__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.hypothesis
+.ruff_cache
+.mypy_cache
+.coverage
+htmlcov
+dist
+build
+node_modules
+frontend
+tests
+docs
+examples
+tools
+symba-sdk-python
+
+# The engine image regenerates Python protobuf stubs from proto/ during build.
+# Host-generated copies may be stale or platform-specific and are not inputs.
+src/symba/v1/*_pb2.py
+src/symba/v1/*_pb2.pyi
+src/symba/v1/*_pb2_grpc.py
+
+# Never send deployment credentials or local overrides to BuildKit.
+.env*
+!.env.example
+docker-compose.override.yml
+
+# Runtime inputs intentionally remain in context:
+# Dockerfile, pyproject.toml, uv.lock, proto/, src/, and database/.

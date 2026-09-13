@@ -113,9 +113,7 @@ class EventStream:
         page. Read-only on the general pool; no subscription/queue involved.
         """
         async with self._pools.general.acquire() as conn:
-            return await repo.events_for_ctx(
-                conn, tenant=tenant, ctx_id=ctx_id, after_id=after_id, limit=limit
-            )
+            return await repo.events_for_ctx(conn, tenant=tenant, ctx_id=ctx_id, after_id=after_id, limit=limit)
 
     @contextlib.asynccontextmanager
     async def subscribe(self, *, tenant: str = "default") -> AsyncGenerator[asyncio.Queue[EventRow]]:

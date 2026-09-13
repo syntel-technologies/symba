@@ -75,3 +75,6 @@ docs/job_engine_design.md
 docs/symba_changes_for_ekg_redesign.md
 docs/symba_implementation.md
 docs/symba_integration_fixes.md
+
+# TypeScript incremental compilation cache
+*.tsbuildinfo

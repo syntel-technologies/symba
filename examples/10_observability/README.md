@@ -20,4 +20,4 @@ and the live SSE event stream.
   [`deploy/prometheus/symba_alerts.yml`](../../deploy/prometheus/symba_alerts.yml).
 - `GET /v1/events/stream` — a Server-Sent-Events tail of `job_events`, filterable by
   `ctx_id`/state; this is what makes the UI update live. Run it with `curl -N` in a
-  second terminal (EventSource in the browser uses `?access_token=` for auth).
+  second terminal (the browser client uses the same `Authorization` header as REST).

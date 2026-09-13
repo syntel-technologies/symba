@@ -1,5 +1,6 @@
 syntax = "proto3";
 package symba.v1;
+
 import "google/protobuf/timestamp.proto";
 import "symba/v1/common.proto";
 
@@ -11,12 +12,12 @@ service WorkerService {
   // worker-driven: the engine never assigns beyond the last announced slots.
   rpc Claim(stream ClaimRequest) returns (stream JobAssignment);
 
-  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);   // unary, cheap
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse); // unary, cheap
   rpc Complete(CompleteRequest) returns (CompleteResponse);
   rpc Fail(FailRequest) returns (FailResponse);
-  rpc Wait(WaitRequest) returns (WaitResponse);                  // park the job until a signal arrives
+  rpc Wait(WaitRequest) returns (WaitResponse); // park the job until a signal arrives
 
-  rpc PutCheckpoint(PutCheckpointRequest) returns (PutCheckpointResponse);  // persist resumable progress
+  rpc PutCheckpoint(PutCheckpointRequest) returns (PutCheckpointResponse); // persist resumable progress
   rpc GetCheckpoint(GetCheckpointRequest) returns (GetCheckpointResponse);
 
   // Lazy tier: fetch a deep ancestor's result on demand. Reads jobs_all
@@ -25,72 +26,91 @@ service WorkerService {
 }
 
 message GetResultRequest {
-  string job_id = 1;            // the RUNNING job asking (authz scope)
+  string job_id = 1; // the RUNNING job asking (authz scope)
   string lease_token = 2;
-  string task_name = 3;         // ancestor task_name/alias within this ctx_id
+  string task_name = 3; // ancestor task_name/alias within this ctx_id
 }
 message GetResultResponse {
-  bytes result_json = 1;        // <= 64KB by construction (result cap)
-  bool found = 2;               // false -> not an ancestor / no result yet
+  bytes result_json = 1; // <= 64KB by construction (result cap)
+  bool found = 2; // false -> not an ancestor / no result yet
 }
 
 message ClaimRequest {
-  string worker_id = 1;         // stable name, used for logging correlation
+  string worker_id = 1; // stable name, used for logging correlation
   repeated string tags = 2;
   uint32 free_slots = 3;
   string sdk_version = 4;
-  map<string, string> labels = 5;  // host, gpu model, region -- fleet view metadata
+  map<string, string> labels = 5; // host, gpu model, region -- fleet view metadata
+  repeated string registered_tasks = 6; // local handler names; observability only, never routing
 }
 
 message JobAssignment {
   Job job = 1;
-  string lease_token = 2;       // opaque; must accompany all mutations
+  string lease_token = 2; // opaque; must accompany all mutations
   google.protobuf.Timestamp lease_expires_at = 3;
-  bytes checkpoint_json = 4;    // pre-loaded checkpoint if one exists
+  bytes checkpoint_json = 4; // pre-loaded checkpoint if one exists
   bytes event_payload_json = 5; // consumed signal payload on WAITING resume
 }
 // Job.upstream carries ONLY the inline tier: immediate chain
 // predecessor + declared depends_on results, <= 256KB total (submit-enforced).
 // Deeper ancestors: GetResult.
 
-message HeartbeatRequest { string job_id = 1; string lease_token = 2; }
+message HeartbeatRequest {
+  string job_id = 1;
+  string lease_token = 2;
+}
 message HeartbeatResponse {
   google.protobuf.Timestamp lease_expires_at = 1;
-  bool cancelled = 2;           // cooperative-cancel flag: worker should abort
+  bool cancelled = 2; // cooperative-cancel flag: worker should abort
 }
 
 message CompleteRequest {
   string job_id = 1;
   string lease_token = 2;
-  bytes result_json = 3;        // cap 64KB
-  bool drop_chain_tail = 4;     // ctx.stop_chain()
-  bool skipped = 5;             // ctx.skip()
+  bytes result_json = 3; // cap 64KB
+  bool drop_chain_tail = 4; // ctx.stop_chain()
+  bool skipped = 5; // ctx.skip()
 }
-message CompleteResponse { bool accepted = 1; }
+message CompleteResponse {
+  bool accepted = 1;
+}
 
 message FailRequest {
   string job_id = 1;
   string lease_token = 2;
-  string error_type = 3;        // exception class name
-  string error_message = 4;     // truncated to 2KB
-  string stack_hash = 5;        // sha256[:16] of stack -- groups identical failures in UI
+  string error_type = 3; // exception class name
+  string error_message = 4; // truncated to 2KB
+  string stack_hash = 5; // sha256[:16] of stack -- groups identical failures in UI
   bool retryable = 6;
   // Worker-declared retry cap from @task(max_attempts=N). The engine owns the
   // retry decision but the LIMIT is a worker-side property (the submitter may not
   // know it), so the worker reports it here and the engine honors it over the
   // job's stored default. 0 = unset -> engine keeps the stored max_attempts.
   uint32 max_attempts = 7;
+  // Safe, allow-listed diagnostics produced by the SDK. Arbitrary exception
+  // strings and provider response bodies must never cross this boundary.
+  bytes error_metadata_json = 8;
+  // True only when error_message was produced by the SDK's safe serializer.
+  // False for legacy workers, whose arbitrary message is discarded server-side.
+  bool error_message_safe = 9;
+  // Typed downstream rate-limit feedback. The engine validates the job's stored
+  // rate_class before draining its shared bucket; workers cannot name a bucket.
+  bool rate_limited = 10;
+  double retry_after_s = 11;
 }
-message FailResponse { bool accepted = 1; bool will_retry = 2; }
+message FailResponse {
+  bool accepted = 1;
+  bool will_retry = 2;
+}
 
 message WaitRequest {
   string job_id = 1;
   string lease_token = 2;
   string wait_key = 3;
-  uint32 timeout_s = 4;         // mandatory
+  uint32 timeout_s = 4; // mandatory
 }
 message WaitResponse {
-  bool parked = 1;              // true -> job is now WAITING; false -> payload delivered inline
+  bool parked = 1; // true -> job is now WAITING; false -> payload delivered inline
   bytes event_payload_json = 2; // populated when a signal was already pending (wait-first race)
 }
 
@@ -99,10 +119,15 @@ message PutCheckpointRequest {
   string lease_token = 2;
   bytes checkpoint_json = 3;
 }
-message PutCheckpointResponse { bool accepted = 1; }
+message PutCheckpointResponse {
+  bool accepted = 1;
+}
 
 message GetCheckpointRequest {
   string job_id = 1;
   string lease_token = 2;
 }
-message GetCheckpointResponse { bytes checkpoint_json = 1; bool found = 2; }
+message GetCheckpointResponse {
+  bytes checkpoint_json = 1;
+  bool found = 2;
+}

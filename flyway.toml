@@ -9,7 +9,7 @@ schemas = ["symba"]
 # Version numbers must be unique across all locations.
 [flyway]
 locations = [
-    "filesystem:/flyway/sql/symba",
+    "filesystem:/opt/symba/flyway/sql/symba",
 ]
 defaultSchema = "symba"
 createSchemas = true

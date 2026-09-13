@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
+from urllib.parse import quote
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -21,14 +22,16 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
+from symba import __version__
+
 
 class AppConfig(BaseModel):
     name: str = "symba"
     description: str = "Symba job execution engine"
     environment: str = "development"  # development | testing | production
-    version_major: str = "0"
-    version_minor: str = "1"
-    version_patch: str = "0"
+    version_major: str = __version__.split(".")[0]
+    version_minor: str = __version__.split(".")[1]
+    version_patch: str = __version__.split(".")[2]
 
 
 class ServerConfig(BaseModel):
@@ -48,6 +51,14 @@ class ServerConfig(BaseModel):
     grpc_max_connection_age_s: int = 1800
     grpc_max_connection_age_grace_s: int = 60
     shutdown_drain_s: int = 30
+    # Production gRPC is TLS-only. Certificate/key paths are mounted runtime
+    # secrets, never image contents. Client authentication remains optional for
+    # token mode and is mandatory when auth.mode=mtls.
+    grpc_tls_enabled: bool = False
+    grpc_tls_cert_file: str = ""
+    grpc_tls_key_file: str = ""
+    grpc_tls_client_ca_file: str = ""
+    grpc_tls_require_client_auth: bool = False
 
     @field_validator("roles")
     @classmethod
@@ -61,6 +72,14 @@ class ServerConfig(BaseModel):
 
 class PostgresConfig(BaseModel):
     dsn: str = "postgresql://symba:symba@localhost:5432/symba"
+    # Prefer discrete fields in deployments so credentials containing URI
+    # delimiters are encoded safely. ``dsn`` remains supported for existing
+    # installations and local configuration.
+    host: str = ""
+    port: int = Field(default=5432, ge=1, le=65535)
+    user: str = ""
+    password: str = ""
+    database: str = ""
     # Flyway-managed application schema. Named `schema_name` (not `schema`) to
     # avoid clashing with pydantic's deprecated BaseModel.schema classmethod.
     schema_name: str = "symba"
@@ -68,6 +87,32 @@ class PostgresConfig(BaseModel):
     hot_command_timeout_s: int = 5
     general_pool_size: int = Field(default=20, ge=2)
     general_command_timeout_s: int = 30
+
+    @property
+    def resolved_dsn(self) -> str:
+        """Return an asyncpg DSN with discrete credentials safely encoded."""
+        if any((self.host, self.user, self.password, self.database)):
+            missing = [
+                name
+                for name, value in (
+                    ("host", self.host),
+                    ("user", self.user),
+                    ("password", self.password),
+                    ("database", self.database),
+                )
+                if not value
+            ]
+            if missing:
+                raise ValueError("postgres discrete connection fields are incomplete: " + ", ".join(missing))
+            host = self.host
+            if ":" in host and not host.startswith("["):
+                host = f"[{host}]"
+            return (
+                "postgresql://"
+                f"{quote(self.user, safe='')}:{quote(self.password, safe='')}"
+                f"@{host}:{self.port}/{quote(self.database, safe='')}"
+            )
+        return self.dsn
 
 
 class RedisConfig(BaseModel):
@@ -202,6 +247,43 @@ class SymbaConfig(BaseSettings):
     log: LogConfig = Field(default_factory=LogConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     cron: CronConfig = Field(default_factory=CronConfig)
+
+    @model_validator(mode="after")
+    def _validate_deployment_security(self) -> Self:
+        """Fail closed for production auth configuration mistakes."""
+        tls_material = (
+            self.server.grpc_tls_cert_file.strip(),
+            self.server.grpc_tls_key_file.strip(),
+        )
+        if self.server.grpc_tls_enabled and not all(tls_material):
+            raise ValueError("gRPC TLS requires both grpc_tls_cert_file and grpc_tls_key_file")
+        if not self.server.grpc_tls_enabled and any(tls_material):
+            raise ValueError("gRPC TLS material requires grpc_tls_enabled=true")
+        if self.server.grpc_tls_require_client_auth:
+            if not self.server.grpc_tls_enabled:
+                raise ValueError("gRPC client authentication requires grpc_tls_enabled=true")
+            if not self.server.grpc_tls_client_ca_file.strip():
+                raise ValueError("gRPC client authentication requires grpc_tls_client_ca_file")
+        if self.auth.mode == "mtls" and not (
+            self.server.grpc_tls_enabled
+            and self.server.grpc_tls_require_client_auth
+            and self.server.grpc_tls_client_ca_file.strip()
+        ):
+            raise ValueError("auth.mode=mtls requires TLS with client authentication and a client CA")
+
+        if self.app.environment.strip().lower() != "production":
+            return self
+        if self.auth.mode == "none":
+            raise ValueError("production deployments require auth.mode=token or mtls")
+        if self.auth.mode == "token":
+            has_shared_secret = any(
+                str(secret).strip() and str(tenant).strip() for secret, tenant in self.auth.tokens.items()
+            )
+            if not has_shared_secret and not self.auth.token_jwks_url.strip():
+                raise ValueError("production token auth requires a non-empty shared secret or token_jwks_url")
+        if not self.server.grpc_tls_enabled:
+            raise ValueError("production deployments require gRPC TLS")
+        return self
 
     @classmethod
     def settings_customise_sources(

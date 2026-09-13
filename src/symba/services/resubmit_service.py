@@ -58,9 +58,7 @@ class ResubmitService:
         logger.info("[resubmit] Replayed", resubmitted_from=job_id, new_job_id=new_id, tenant=tenant)
         return ResubmitOutcome(new_job_id=str(new_id), resubmitted_from=job_id)
 
-    async def resubmit_many(
-        self, *, job_ids: list[str], tenant: str = "default"
-    ) -> list[ResubmitOutcome]:
+    async def resubmit_many(self, *, job_ids: list[str], tenant: str = "default") -> list[ResubmitOutcome]:
         """Bulk DLQ replay. Each id is resubmitted independently so one bad id skips
         (logged) rather than failing the whole batch — ops replays should be robust."""
         outcomes: list[ResubmitOutcome] = []

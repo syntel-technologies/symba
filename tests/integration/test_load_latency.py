@@ -1,21 +1,21 @@
 # pyright: reportPrivateUsage=false, reportUnknownMemberType=false, reportUnknownVariableType=false
 """L6: the dispatcher latency floor.
 
-    what this pins
-    ---------------
-    This promises p95 queue->claim < 150ms WITHOUT a NOTIFY — pure adaptive polling.
-    The risk it guards: the polling tick silently degrading that latency target. Two
-    deterministic assertions, both driving the REAL Dispatcher.run() loop over PG18:
+what this pins
+---------------
+This promises p95 queue->claim < 150ms WITHOUT a NOTIFY — pure adaptive polling.
+The risk it guards: the polling tick silently degrading that latency target. Two
+deterministic assertions, both driving the REAL Dispatcher.run() loop over PG18:
 
-      idle floor   submit ONE job into an idle system -> claimed within
-                   max_tick_ms + margin (the worst case is a full idle-decayed tick;
-                   the local-submit wake should actually beat that).
-      burst p95    submit a burst, drive the loop, and assert the ready_to_claim
-                   histogram p95 < 150ms — the promised number, measured from DB
-                   clocks (run_at -> started_at) so it is skew-free.
+  idle floor   submit ONE job into an idle system -> claimed within
+               max_tick_ms + margin (the worst case is a full idle-decayed tick;
+               the local-submit wake should actually beat that).
+  burst p95    submit a burst, drive the loop, and assert the ready_to_claim
+               histogram p95 < 150ms — the promised number, measured from DB
+               clocks (run_at -> started_at) so it is skew-free.
 
-    k6 counterpart (tests/load/ready_to_claim.js) runs the same assertion against a
-    compose-up engine nightly; this L6 test is the CI-fast, worker-free proof.
+k6 counterpart (tests/load/ready_to_claim.js) runs the same assertion against a
+compose-up engine nightly; this L6 test is the CI-fast, worker-free proof.
 """
 
 from __future__ import annotations

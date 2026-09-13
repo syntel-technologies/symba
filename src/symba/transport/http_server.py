@@ -38,6 +38,7 @@ from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from symba.core.errors import SymbaError, Unauthenticated
 from symba.db.records import (
@@ -53,7 +54,7 @@ from symba.db.records import (
 from symba.observability.logging import logger, uvicorn_log_config
 from symba.observability.metrics import REGISTRY
 from symba.observability.tracing import TraceIDMiddleware
-from symba.transport.auth import Principal
+from symba.transport.auth import Authenticator, Principal
 from symba.transport.state import EngineState
 
 logger = logger.bind(service="http_server", context="engine/transport")
@@ -231,6 +232,7 @@ class QueuesDTO(BaseModel):
 class WorkerDTO(BaseModel):
     worker_id: str
     tags: list[str]
+    registered_tasks: list[str]
     labels: dict[str, Any]
     slots: int
     slots_busy: int
@@ -242,6 +244,7 @@ class WorkerDTO(BaseModel):
         return cls(
             worker_id=r.worker_id,
             tags=r.tags,
+            registered_tasks=r.registered_tasks,
             labels=r.labels,
             slots=r.slots,
             slots_busy=r.slots_busy,
@@ -356,40 +359,40 @@ def _to_spec(tenant: str, dto: JobSpecDTO) -> SubmitSpec:
     )
 
 
-def build_app(state: EngineState) -> FastAPI:
-    app = FastAPI(title="Symba", docs_url="/docs", openapi_url="/openapi.json")
-    authenticator = state.authenticator
+class HttpAuthMiddleware:
+    """Authenticate without buffering bodies or spawning per-request proxy tasks."""
 
-    # Unauthenticated surface: liveness/readiness probes and the metrics scrape must
-    # work before any credential is presented (the LB and Prometheus are trusted
-    # infra, not tenants). Docs/openapi are served for the generated client + humans.
-    _PUBLIC_PATHS = frozenset({"/healthz", "/readyz", "/metrics", "/docs", "/openapi.json"})
+    def __init__(self, app: ASGIApp, authenticator: Authenticator) -> None:
+        self.app = app
+        self.authenticator = authenticator
 
-    app.add_middleware(TraceIDMiddleware)
-
-    @app.middleware("http")
-    async def _auth_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
-        # Fail-closed: every /v1 path requires a Principal; anything else on the public
-        # list is exempt. The resolved principal rides on request.state for the
-        # require_principal dependency (which enforces tenant scoping per handler).
-        if request.url.path in _PUBLIC_PATHS or not request.url.path.startswith("/v1"):
-            return await call_next(request)
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or not scope["path"].startswith("/v1"):
+            await self.app(scope, receive, send)
+            return
+        request = Request(scope)
         peer_ip = request.client.host if request.client else None
-        # SSE fallback: the browser EventSource API cannot set an Authorization header,
-        # so /v1/events/stream accepts the credential as ?access_token= instead.
-        authorization = request.headers.get("authorization")
-        if authorization is None and (qs_token := request.query_params.get("access_token")):
-            authorization = f"Bearer {qs_token}"
         try:
-            principal = authenticator.authenticate(
-                authorization=authorization,
+            principal = self.authenticator.authenticate(
+                authorization=request.headers.get("authorization"),
                 tenant_header=request.headers.get("x-symba-tenant"),
                 peer_ip=peer_ip,
             )
         except SymbaError as exc:
-            return JSONResponse(status_code=exc.status_code, content=exc.to_dict())
+            response = JSONResponse(status_code=exc.status_code, content=exc.to_dict())
+            await response(scope, receive, send)
+            return
         request.state.principal = principal
-        return await call_next(request)
+        await self.app(scope, receive, send)
+
+
+def build_app(state: EngineState) -> FastAPI:
+    app = FastAPI(title="Symba", docs_url="/docs", openapi_url="/openapi.json")
+    # Tracing wraps auth so failed authentication gets the same request correlation.
+    # Pure ASGI middleware preserves streaming and avoids two BaseHTTPMiddleware
+    # task groups/message channels for every submitted job.
+    app.add_middleware(HttpAuthMiddleware, authenticator=state.authenticator)
+    app.add_middleware(TraceIDMiddleware)
 
     @app.exception_handler(SymbaError)
     async def _symba_error_handler(_request: Request, exc: SymbaError) -> JSONResponse:
@@ -404,7 +407,9 @@ def build_app(state: EngineState) -> FastAPI:
             headers = {"Retry-After": str(int(retry_after))}
         return JSONResponse(status_code=exc.status_code, content=exc.to_dict(), headers=headers)
 
-    def require_principal(request: Request) -> Principal:
+    async def require_principal(request: Request) -> Principal:
+        # This only reads request state. Keep it on the event loop instead of
+        # sending every HTTP request through the synchronous dependency thread pool.
         # The middleware set this for every /v1 path; its absence means the request
         # slipped past auth (should be impossible) — refuse rather than guess a tenant.
         principal = getattr(request.state, "principal", None)
@@ -574,7 +579,7 @@ def build_app(state: EngineState) -> FastAPI:
     async def events_stream(request: Request, principal: Principal = Depends(require_principal)) -> StreamingResponse:
         # Server-Sent Events: one long-lived text/event-stream fed by the engine's
         # in-process ledger fan-out. A keepalive comment every 15s holds the
-        # connection through proxies; the client (EventSource) auto-reconnects.
+        # connection through proxies; the fetch-based UI client auto-reconnects.
         async def _gen() -> AsyncIterator[bytes]:
             async with state.events.subscribe(tenant=principal.tenant) as queue:
                 while True:

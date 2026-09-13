@@ -19,6 +19,11 @@ from datetime import datetime
 from typing import Any
 
 
+def _empty_payload() -> dict[str, Any]:
+    """Return a precisely typed payload for dataclass default factories."""
+    return {}
+
+
 @dataclass(slots=True)
 class SubmitSpec:
     """One job to insert. Mirrors the submit.sql column order."""
@@ -78,6 +83,14 @@ class ClaimedJob:
 
 
 @dataclass(slots=True)
+class ExhaustedLease:
+    """An abandoned execution whose stored retry budget is exhausted."""
+
+    job_id: str
+    lease_token: str
+
+
+@dataclass(slots=True)
 class InlineUpstream:
     """One producer in the Job.upstream inline tier (chain pred or depends_on)."""
 
@@ -102,9 +115,10 @@ class TerminalRow:
     on_failure: dict[str, Any] | None = None
     parent_gate_id: str | None = None
     prior_state: str | None = None
-    # Inherited by a chain continuation so the next link
-    # stays in the same pipeline lineage and routing lane. Defaulted so cancel/fail
-    # callers that don't SELECT them still construct a valid row.
+    # Used while materializing a chain continuation. Lineage and worker routing
+    # carry forward; rate_class is retained here for terminal observability but is
+    # deliberately not copied to the implicit continuation. Defaulted so
+    # cancel/fail callers that don't SELECT these still construct a valid row.
     pipeline: str | None = None
     stage: str | None = None
     priority: int = 0
@@ -176,6 +190,8 @@ class JobListItem:
     id: str
     tenant: str
     task_name: str
+    pipeline: str | None
+    stage: str | None
     state: str
     attempt: int
     priority: int
@@ -205,6 +221,7 @@ class WorkerRow:
 
     worker_id: str
     tags: list[str]
+    registered_tasks: list[str]
     labels: dict[str, Any]
     slots: int
     slots_busy: int
@@ -224,7 +241,7 @@ class CronRow:
     last_fire: datetime | None
     next_fire: datetime | None
     created_at: datetime
-    payload: dict[str, Any] = field(default_factory=dict)
+    payload: dict[str, Any] = field(default_factory=_empty_payload)
 
 
 @dataclass(slots=True)

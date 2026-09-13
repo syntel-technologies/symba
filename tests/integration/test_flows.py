@@ -4,7 +4,8 @@
 Chains are linked lists carried on the job row as (on_success, chain_tail). On each
 successful Complete the engine, IN THE SAME TRANSACTION as the archive move, inserts
 the next link as a fresh queued job that inherits the predecessor's lineage
-(ctx_id/pipeline) and routing (group/priority/runs_on/rate_class). ctx.stop_chain
+(ctx_id/pipeline) and worker routing (group/priority/runs_on). ``rate_class`` is
+job-local and is not copied to implicit tails. ctx.stop_chain
 (drop_chain_tail=true) ends the chain early.
 
     a  ──success──►  b  ──success──►  c        (a: on_success=b, chain_tail=[c])
@@ -15,6 +16,7 @@ the next link as a fresh queued job that inherits the predecessor's lineage
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 
@@ -63,6 +65,37 @@ async def test_chain_continuation_advances_on_success(db: asyncpg.Connection, po
     assert b["on_success"] == "c"
     assert list(b["chain_tail"]) == []
     assert b["priority"] == 7 and b["group_key"] == "g1"
+
+
+async def test_chain_continuation_does_not_spend_predecessor_rate_class(
+    db: asyncpg.Connection,
+    pools: Pools,
+) -> None:
+    """A provider head is throttled, while its implicit DB tail is not."""
+    svc = JobService(pools, load_config())
+    job_id = await h.seed(db, h.spec(task_name="provider", rate_class="llm"))
+    ctx_id = str(uuid.uuid4())
+    await db.execute(
+        "UPDATE jobs SET on_success='db.apply', ctx_id=$2 WHERE id=$1",
+        job_id,
+        ctx_id,
+    )
+
+    claimed = await h.claim_one(db)
+    assert claimed.raw["rate_class"] == "llm"
+    await svc.complete(
+        job_id=job_id,
+        lease_token=claimed.lease_token,
+        result={"ok": True},
+    )
+
+    tail = await db.fetchrow(
+        "SELECT task_name, rate_class FROM jobs WHERE ctx_id=$1",
+        ctx_id,
+    )
+    assert tail is not None
+    assert tail["task_name"] == "db.apply"
+    assert tail["rate_class"] is None
 
 
 async def test_chain_runs_to_completion_across_links(db: asyncpg.Connection, pools: Pools) -> None:
@@ -155,16 +188,13 @@ async def test_inline_upstream_delivers_chain_predecessor(db: asyncpg.Connection
     job_id = await h.seed(db, h.spec(task_name="parse.parse_document"))
     ctx_id = str(uuid.uuid4())
     await db.execute(
-        "UPDATE jobs SET on_success='parse.complete_stage', ctx_id=$2, "
-        "pipeline='ingestion', stage='parse' WHERE id=$1",
+        "UPDATE jobs SET on_success='parse.complete_stage', ctx_id=$2, pipeline='ingestion', stage='parse' WHERE id=$1",
         job_id,
         ctx_id,
     )
 
     c1 = await h.claim_one(db)
-    await svc.complete(
-        job_id=c1.id, lease_token=c1.lease_token, result={"output_ref": "parsed/doc.json"}
-    )
+    await svc.complete(job_id=c1.id, lease_token=c1.lease_token, result={"output_ref": "parsed/doc.json"})
 
     registry = WorkerRegistry()
     conn = WorkerConn(worker_id="w-inline", tags=frozenset(), free_slots=2, labels={})
@@ -309,12 +339,14 @@ async def _fanout(
     policy: str,
     n: int,
     on_complete_payload: dict[str, object] | None = None,
+    on_complete_failure: dict[str, object] | None = None,
 ) -> tuple[str, list[str]]:
     from symba.services.fanout_service import FanOutService
 
     fan = FanOutService(pools, h.registry(), load_config())
     children = [h.spec(task_name=f"child{i}") for i in range(n)]
     on_complete = h.spec(task_name="reduce", payload=on_complete_payload)
+    on_complete.on_failure = on_complete_failure
     out = await fan.fan_out(tenant="default", ctx_id=None, children=children, on_complete=on_complete, policy=policy)
     return out.gate_id, out.child_job_ids
 
@@ -361,6 +393,55 @@ async def test_gate_all_terminal_fires_even_with_a_dead_child(db: asyncpg.Connec
     )
     reduce = await _reduce_jobs(db)
     assert len(reduce) == 1  # fired despite the dead child (all_terminal)
+
+
+async def test_gate_all_success_dead_child_resolves_to_failure_once(
+    db: asyncpg.Connection,
+    pools: Pools,
+) -> None:
+    """An impossible all_success gate must not strand its continuation forever."""
+    svc = JobService(pools, load_config())
+    gate_id, _ = await _fanout(
+        db,
+        pools,
+        policy="all_success",
+        n=3,
+        on_complete_failure={
+            "task_name": "reduce_failed",
+            "payload": {"source": "gate"},
+        },
+    )
+
+    dead = await h.claim_one(db, worker="w1")
+    await _fail_die(svc, dead)
+    assert await db.fetchval("SELECT fired_at FROM gates WHERE id=$1", gate_id) is None
+    assert await db.fetchval("SELECT count(*) FROM jobs WHERE task_name='reduce_failed'") == 0
+
+    # Settle the final two children concurrently. The row lock serializes their
+    # bumps and exactly one transaction claims the gate's failure resolution.
+    child_2 = await h.claim_one(db, worker="w2")
+    child_3 = await h.claim_one(db, worker="w3")
+    await asyncio.gather(
+        svc.complete(job_id=child_2.id, lease_token=child_2.lease_token, result=None),
+        svc.complete(job_id=child_3.id, lease_token=child_3.lease_token, result=None),
+    )
+
+    gate = await db.fetchrow(
+        "SELECT completed_children, succeeded_children, failed_children, fired_at FROM gates WHERE id=$1",
+        gate_id,
+    )
+    assert gate is not None
+    assert gate["completed_children"] == 3
+    assert gate["succeeded_children"] == 2
+    assert gate["failed_children"] == 1
+    assert gate["fired_at"] is not None
+    assert await _reduce_jobs(db) == []
+    failure_jobs = await db.fetch("SELECT state, ctx_id, group_key, payload FROM jobs WHERE task_name='reduce_failed'")
+    assert len(failure_jobs) == 1
+    assert failure_jobs[0]["state"] == "queued"
+    assert failure_jobs[0]["group_key"] == gate_id
+    payload = failure_jobs[0]["payload"]
+    assert payload["source"] == "gate"
 
 
 async def test_gate_quorum_fires_at_threshold(db: asyncpg.Connection, pools: Pools) -> None:
@@ -545,9 +626,7 @@ async def test_cancel_terminal_is_noop(db: asyncpg.Connection, pools: Pools) -> 
 
 
 @pytest.mark.parametrize("state", ["submitted", "queued", "waiting"])
-async def test_cancel_nonrunning_states_archive_cancelled(
-    db: asyncpg.Connection, pools: Pools, state: str
-) -> None:
+async def test_cancel_nonrunning_states_archive_cancelled(db: asyncpg.Connection, pools: Pools, state: str) -> None:
     """submitted/queued/waiting all take the immediate-archive path."""
     svc = CancelService(pools, h.registry())
     job_id = await h.seed(db, h.spec(state=state))
@@ -571,9 +650,7 @@ async def test_cancel_future_run_at_needs_no_special_path(db: asyncpg.Connection
 
 
 @pytest.mark.parametrize("final_state", ["succeeded", "dead"])
-async def test_cancel_already_terminal_is_noop(
-    db: asyncpg.Connection, pools: Pools, final_state: str
-) -> None:
+async def test_cancel_already_terminal_is_noop(db: asyncpg.Connection, pools: Pools, final_state: str) -> None:
     """A job already archived as succeeded/dead is an idempotent no-op — cancel must
     NOT resurrect it or error."""
     svc = CancelService(pools, h.registry())

@@ -1,16 +1,16 @@
 # pyright: reportPrivateUsage=false
 """L2 proof of the per-tenant queue cap.
 
-    the gate
-    --------------------
-    tenant_queued_cap = 0  -> unlimited (the default, no COUNT round trip)
-    tenant_queued_cap = N  -> submit that would push a tenant's LIVE count past N is
-                              rejected with TenantQuotaExceeded (429 / RESOURCE_EXHAUSTED),
-                              retryable-by-contract, carrying a Retry-After hint.
+the gate
+--------------------
+tenant_queued_cap = 0  -> unlimited (the default, no COUNT round trip)
+tenant_queued_cap = N  -> submit that would push a tenant's LIVE count past N is
+                          rejected with TenantQuotaExceeded (429 / RESOURCE_EXHAUSTED),
+                          retryable-by-contract, carrying a Retry-After hint.
 
-    checked per DISTINCT tenant against the WHOLE batch's contribution, inside the
-    submit tx, so an all-or-nothing batch cannot straddle the cap and one tenant's
-    load never counts against another's.
+checked per DISTINCT tenant against the WHOLE batch's contribution, inside the
+submit tx, so an all-or-nothing batch cannot straddle the cap and one tenant's
+load never counts against another's.
 """
 
 from __future__ import annotations

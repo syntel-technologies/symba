@@ -10,12 +10,16 @@
 -- (after commit, there is nothing further to signal).
 --
 -- Inheritance: the continuation stays in the SAME pipeline/ctx so the whole
--- chain shares one lineage in the UI DAG, and inherits routing/priority/tenant so a
--- chain does not silently change lanes mid-flight. It also inherits on_failure so a
--- DEAD chain tail still fires the submitter's mark_stage_failed (or equivalent)
+-- chain shares one lineage in the UI DAG, and inherits worker
+-- routing/priority/tenant so a chain does not silently change execution lanes
+-- mid-flight. It also inherits on_failure so a DEAD chain tail still fires the
+-- submitter's mark_stage_failed (or equivalent)
 -- hook — without this, a failing complete_stage leaves the app spine in-progress
--- forever. It carries NO dedup_key (a continuation is not a user resubmit) and
--- starts a fresh attempt budget. payload is empty by design (SDK-3): thread data
+-- forever. rate_class is intentionally cleared: it is a per-job provider-start
+-- budget, not chain routing, and DB-only tails must not spend provider quota. A
+-- continuation that calls a provider must be submitted as an explicit JobSpec with
+-- its own rate_class. It carries NO dedup_key (a continuation is not a user
+-- resubmit) and starts a fresh attempt budget. payload is empty by design (SDK-3): thread data
 -- via ctx.output[predecessor], not by copying the caller's payload.
 --
 -- Parameters:
@@ -30,7 +34,7 @@
 --   $9 text    group_key        (inherited, may be NULL)
 --   $10 int    max_concurrent_per_group (inherited, may be NULL)
 --   $11 text[] runs_on          (inherited routing)
---   $12 text   rate_class       (inherited, may be NULL)
+--   $12 text   rate_class       (always NULL for an implicit chain continuation)
 --   $13 int    lease_ttl_s      (inherited)
 --   $14 jsonb  on_failure       (inherited; NULL when the root had none)
 INSERT INTO jobs (

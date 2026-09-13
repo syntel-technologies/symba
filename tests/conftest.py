@@ -13,8 +13,13 @@ from collections.abc import AsyncIterator
 import asyncpg
 import pytest_asyncio
 
-from symba.db.migrate import apply_schema
-from symba.db.pool import Pools, _init_connection
+# The repository-local .env is a deployment input, not a test fixture. Keep the
+# default test engine unauthenticated and let auth-boundary tests opt into token
+# or mTLS mode explicitly through their copied configuration.
+os.environ["SYMBA_AUTH__MODE"] = "none"
+
+from symba.db.migrate import apply_schema  # noqa: E402
+from symba.db.pool import Pools, _init_connection  # noqa: E402
 
 
 def _external_dsn() -> str | None:

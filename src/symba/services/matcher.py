@@ -7,20 +7,24 @@
        (one claim query per tag group).
     2. [M3] peek rate_class buckets, reserve tokens, pass exhausted classes as $2.
        At M1 the exhausted list is empty (rate limiting lands in M3).
-    3. claim with LIMIT = sum(free_slots) for the tag group.
+    3. cap advisory free_slots by authoritative attributed running jobs, then
+       claim up to the resulting capacity for the tag group.
     4. fairness shaping: interleave returned rows round-robin by group_key within
        an equal priority band, then assign to workers round-robin.
     5. push JobAssignments onto worker queues; decrement local free_slots.
 
-Per-group exactness for max_concurrent_per_group=1 is enforced two ways: the SQL
-fairness cap ($5 = per_group_cap) bounds rows-per-group in a batch, and the claim
-runs in its own transaction so group_running is authoritative across batches.
+Per-group exactness for every positive max_concurrent_per_group is enforced in
+the claim SQL: concurrent claimers serialize on the group's counter row and each
+batch is bounded by (cap - running). The independent $5 per_group_cap only shapes
+fairness so one uncapped or high-cap group cannot monopolize a dispatch batch.
 """
 
 from __future__ import annotations
 
 import json
-from collections import defaultdict
+import time
+from bisect import bisect_right
+from collections import OrderedDict, defaultdict
 
 from symba.config import SymbaConfig
 from symba.db import repository as repo
@@ -36,6 +40,10 @@ from symba.v1 import data_plane_pb2 as dp
 
 logger = logger.bind(service="matcher", context="engine/services")
 
+# Retain fairness across small dispatch batches without retaining disconnected
+# worker objects or an unbounded history of obsolete tag configurations.
+_MAX_WORKER_CURSORS = 1024
+
 
 class Matcher:
     def __init__(
@@ -45,6 +53,8 @@ class Matcher:
         self._registry = registry
         self._cfg = cfg
         self._rate = rate_limiter
+        self._last_rate_stall_log_at = 0.0
+        self._last_worker_by_tags: OrderedDict[tuple[str, ...], str] = OrderedDict()
 
     async def pass_(self) -> int:
         """Run one matching pass. Returns the number of jobs assigned this tick."""
@@ -58,7 +68,28 @@ class Matcher:
         return assigned_total
 
     async def _match_tag_group(self, tags: list[str], workers: list[WorkerConn]) -> int:
-        limit = sum(w.free_slots for w in workers)
+        # Slot frames are advisory and can cross assignments already in flight on
+        # the bidi Claim stream. Bound them by jobs durably attributed to each
+        # worker so a stale frame cannot cause over-assignment.
+        async with self._pools.acquire_hot() as conn:
+            running_by_worker = await repo.running_counts_by_worker(
+                conn,
+                worker_ids=[worker.worker_id for worker in workers],
+            )
+        # A Claim frame reports an absolute local slot count and can cross jobs
+        # already travelling in the opposite direction of the bidi stream. Bound
+        # that advisory value by the jobs durably attributed to the worker. The
+        # dispatcher persists every assignment before its next pass, so this
+        # closes the stale-frame race without reducing a many-slot worker to one
+        # assignment per tick.
+        capacity_by_worker = {
+            worker.worker_id: min(
+                worker.free_slots,
+                max(0, worker.slots_total - running_by_worker.get(worker.worker_id, 0)),
+            )
+            for worker in workers
+        }
+        limit = sum(capacity_by_worker.values())
         if limit <= 0:
             return 0
 
@@ -76,6 +107,19 @@ class Matcher:
                     limit=limit,
                     claimed_by=f"engine:{tags or 'untagged'}",
                     per_group_cap=per_group_cap,
+                    rate_quotas=reserved,
+                )
+
+        if not claimed and reserved:
+            now = time.monotonic()
+            if now - self._last_rate_stall_log_at >= 30.0:
+                self._last_rate_stall_log_at = now
+                logger.warning(
+                    "[matcher] Reserved rate tokens but claim returned no jobs",
+                    tags=tags,
+                    limit=limit,
+                    exhausted_rate_classes=exhausted,
+                    rate_quotas=reserved,
                 )
 
         # Step 5: return unused reservations (claimed fewer of a class than
@@ -91,7 +135,12 @@ class Matcher:
             upstream_by_job = await repo.fetch_inline_upstream(conn, job_ids=[j.id for j in claimed])
 
         ordered = _fairness_shape(claimed)
-        assigned, attribution = await self._assign_round_robin(ordered, workers, upstream_by_job)
+        assigned, attribution = await self._assign_round_robin(
+            ordered,
+            workers,
+            upstream_by_job,
+            capacity_by_worker=capacity_by_worker,
+        )
         # Re-stamp claimed_by with the REAL worker each job landed on:
         # claim.sql stamped the whole batch "engine:{tags}"; this records the actual
         # assignment target so the fleet view can attribute running jobs per worker.
@@ -155,6 +204,8 @@ class Matcher:
         jobs: list[ClaimedJob],
         workers: list[WorkerConn],
         upstream_by_job: dict[str, list[InlineUpstream]] | None = None,
+        *,
+        capacity_by_worker: dict[str, int] | None = None,
     ) -> tuple[int, list[tuple[str, str, str]]]:
         """Assign claimed jobs to workers round-robin.
 
@@ -163,23 +214,41 @@ class Matcher:
         jobs.claimed_by so each running job is attributable to its worker.
         """
         upstream_by_job = upstream_by_job or {}
+        if not jobs or not workers:
+            return 0, []
+        # Registry insertion order changes on reconnect and available snapshots
+        # omit saturated workers. Resume after the last assigned worker ID in a
+        # stable ring, even when that worker is absent from the current snapshot.
+        workers = sorted(workers, key=lambda worker: worker.worker_id)
+        tag_key = tuple(sorted(workers[0].tags))
+        previous_worker = self._last_worker_by_tags.get(tag_key, "")
+        idx = bisect_right([worker.worker_id for worker in workers], previous_worker)
         cap_bytes = self._cfg.matcher.max_upstream_inline_kb * 1024
         assigned = 0
         attribution: list[tuple[str, str, str]] = []
-        idx = 0
+        remaining = (
+            dict(capacity_by_worker)
+            if capacity_by_worker is not None
+            else {worker.worker_id: worker.free_slots for worker in workers}
+        )
         for job in jobs:
             # Find the next worker (round-robin) that still has a free slot.
             placed = False
             for _ in range(len(workers)):
                 w = workers[idx % len(workers)]
                 idx += 1
-                if w.free_slots > 0:
+                if remaining.get(w.worker_id, 0) > 0:
                     upstream = _cap_upstream(upstream_by_job.get(job.id, []), cap_bytes, job_id=job.id)
                     await w.queue.put(_to_assignment(job, upstream=upstream))
-                    w.free_slots -= 1
+                    remaining[w.worker_id] -= 1
+                    w.free_slots = max(0, w.free_slots - 1)
                     assigned += 1
                     placed = True
                     attribution.append((job.id, w.worker_id, job.lease_token))
+                    self._last_worker_by_tags[tag_key] = w.worker_id
+                    self._last_worker_by_tags.move_to_end(tag_key)
+                    if len(self._last_worker_by_tags) > _MAX_WORKER_CURSORS:
+                        self._last_worker_by_tags.popitem(last=False)
                     metrics.jobs_total.labels(tenant=job.tenant, task=job.task_name, state="assigned").inc()
                     _observe_ready_to_claim(job)
                     break
@@ -246,9 +315,7 @@ def _round_robin_by_group(jobs: list[ClaimedJob]) -> list[ClaimedJob]:
     return out
 
 
-def _cap_upstream(
-    producers: list[InlineUpstream], cap_bytes: int, *, job_id: str
-) -> list[InlineUpstream]:
+def _cap_upstream(producers: list[InlineUpstream], cap_bytes: int, *, job_id: str) -> list[InlineUpstream]:
     """Enforce the per-assignment inline-tier byte cap.
 
     Oversized sets are dropped entirely (worker falls back to lazy GetResult via
@@ -270,9 +337,7 @@ def _cap_upstream(
     return []
 
 
-def _to_assignment(
-    job: ClaimedJob, *, upstream: list[InlineUpstream] | None = None
-) -> dp.JobAssignment:
+def _to_assignment(job: ClaimedJob, *, upstream: list[InlineUpstream] | None = None) -> dp.JobAssignment:
     raw = job.raw
     # Identity/routing fields must be copied from the claimed row. If ctx_id is
     # omitted the SDK falls back to job.id (dispatch.py), so every chain link

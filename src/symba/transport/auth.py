@@ -140,9 +140,7 @@ class Authenticator:
             return self._verify_jwt(cred)
         raise Unauthenticated("unrecognized bearer credentials")
 
-    def authenticate(
-        self, *, authorization: str | None, tenant_header: str | None, peer_ip: str | None
-    ) -> Principal:
+    def authenticate(self, *, authorization: str | None, tenant_header: str | None, peer_ip: str | None) -> Principal:
         """Resolve an inbound request to a Principal or raise Unauthenticated."""
         mode = self._cfg.mode
         if mode == "none":
@@ -152,9 +150,7 @@ class Authenticator:
                     peer_ip=peer_ip,
                     trusted_cidrs=self._cfg.trusted_proxy_cidrs,
                 )
-                raise Unauthenticated(
-                    "auth disabled; only loopback or trusted-proxy callers are permitted"
-                )
+                raise Unauthenticated("auth disabled; only loopback or trusted-proxy callers are permitted")
             return Principal(tenant=_DEFAULT_TENANT, subject="local", method="none")
         if mode == "mtls":
             # TLS terminates upstream; the trusted proxy passes the verified identity.
@@ -202,9 +198,7 @@ class AuthInterceptor(grpc.aio.ServerInterceptor):
         # verified fully.
         try:
             if self._auth.mode != "none":
-                self._auth.authenticate(
-                    authorization=authorization, tenant_header=tenant_header, peer_ip=None
-                )
+                self._auth.authenticate(authorization=authorization, tenant_header=tenant_header, peer_ip=None)
         except Unauthenticated as exc:
             # Capture the message: `exc` is cleared when the except block exits, so the
             # abort handler (called later, per RPC) must close over a plain string.

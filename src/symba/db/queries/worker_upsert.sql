@@ -13,13 +13,15 @@
 -- Parameters:
 --   $1 text    worker_id
 --   $2 text[]  tags
---   $3 jsonb   labels
---   $4 int     slots       (total capacity advertised by the worker)
---   $5 int     slots_busy  (slots - free_slots, derived by the caller)
-INSERT INTO workers (worker_id, tags, labels, slots, slots_busy, last_seen, stale)
-VALUES ($1, $2, $3, $4, $5, now(), false)
+--   $3 text[]  registered_tasks (operator metadata; never used for routing)
+--   $4 jsonb   labels
+--   $5 int     slots       (total capacity advertised by the worker)
+--   $6 int     slots_busy  (slots - free_slots, derived by the caller)
+INSERT INTO workers (worker_id, tags, registered_tasks, labels, slots, slots_busy, last_seen, stale)
+VALUES ($1, $2, $3, $4, $5, $6, now(), false)
 ON CONFLICT (worker_id) DO UPDATE
 SET tags       = EXCLUDED.tags,
+    registered_tasks = EXCLUDED.registered_tasks,
     labels     = EXCLUDED.labels,
     slots      = EXCLUDED.slots,
     slots_busy = EXCLUDED.slots_busy,

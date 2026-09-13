@@ -123,9 +123,7 @@ class SignalService:
             payload = await repo.wait_consume(conn, tenant=tenant, wait_key=wait_key)
             if payload is not None:
                 # signal-first: resume immediately, no parking.
-                await repo.record_event(
-                    conn, job_id=job_id, event="signal_consumed", detail={"wait_key": wait_key}
-                )
+                await repo.record_event(conn, job_id=job_id, event="signal_consumed", detail={"wait_key": wait_key})
                 metrics.signals_total.labels(outcome="consumed").inc()
                 logger.info("[wait] Pending signal consumed; not parking", job_id=job_id, wait_key=wait_key)
                 return WaitOutcome(resumed_immediately=True, payload=payload)

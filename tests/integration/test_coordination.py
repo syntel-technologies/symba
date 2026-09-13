@@ -1,21 +1,21 @@
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportArgumentType=false, reportPrivateUsage=false
 """L4 coordination regression pins: re-entry contract + loop containment.
 
-    re-entry contract
-    -----------------------------------------------------
-    The engine-owned half of the re-entry story (the SDK owns spy-counter recompute
-    proofs, which are out of scope here): a handler that checkpointed BEFORE waiting
-    is resumed on a different worker with its checkpoint preloaded, and a pending
-    signal is consumed on re-wait WITHOUT re-parking. This proves the primitives the
-    SDK's "don't re-buy the LLM call" guarantee stands on.
+re-entry contract
+-----------------------------------------------------
+The engine-owned half of the re-entry story (the SDK owns spy-counter recompute
+proofs, which are out of scope here): a handler that checkpointed BEFORE waiting
+is resumed on a different worker with its checkpoint preloaded, and a pending
+signal is consumed on re-wait WITHOUT re-parking. This proves the primitives the
+SDK's "don't re-buy the LLM call" guarantee stands on.
 
-    loop containment
-    --------------------------------------------------
-    A single poisoned pass (bad row / PG error) in the dispatcher, sweeper, or cron
-    loop must be CONTAINED: logged, counted in symba_loop_errors_total, and the loop
-    keeps ticking. A persistent failure is surfaced by the metric alert, never by a
-    silent process death. We drive ONE bad pass, assert the counter moved and the loop
-    survives, then a healthy pass to prove throughput recovers.
+loop containment
+--------------------------------------------------
+A single poisoned pass (bad row / PG error) in the dispatcher, sweeper, or cron
+loop must be CONTAINED: logged, counted in symba_loop_errors_total, and the loop
+keeps ticking. A persistent failure is surfaced by the metric alert, never by a
+silent process death. We drive ONE bad pass, assert the counter moved and the loop
+survives, then a healthy pass to prove throughput recovers.
 """
 
 from __future__ import annotations
@@ -68,9 +68,7 @@ async def test_gap5_reentry_checkpoint_and_signal_consume(db: asyncpg.Connection
     assert a2.raw["event_payload"] == {"approved": True}
 
 
-async def test_gap5_signal_first_reentry_consumes_without_parking(
-    db: asyncpg.Connection, pools: Pools
-) -> None:
+async def test_gap5_signal_first_reentry_consumes_without_parking(db: asyncpg.Connection, pools: Pools) -> None:
     # If the signal is already pending when the (resumed) handler re-waits, it consumes
     # inline and NEVER parks again — the re-wait is a no-op resume, not a second block.
     signals = SignalService(pools, WorkerRegistry())

@@ -1,0 +1,23 @@
+# syntax=docker/dockerfile:1.4@sha256:9ba7531bd80fb0a858632727cf7a112fbfd19b17e94c4e84ced81e24ef1a0dbc
+
+FROM alpine/openssl:3.5.4@sha256:42c7389ef077aed0eb4e96d0abbd094083d701bbaff1313073b061c0c9cd8278
+
+COPY --chmod=0555 scripts/release/verify_provenance.sh /usr/local/bin/symba-verify-release
+COPY --chmod=0555 scripts/tls/preflight.sh /usr/local/bin/symba-runtime-preflight
+
+ARG KNOR_RELEASE_ID=development
+ARG KNOR_RELEASE_MANIFEST_SHA256=unreleased
+RUN mkdir -p /usr/local/share/symba && \
+    printf '%s\n' "$KNOR_RELEASE_ID" > /usr/local/share/symba/release-id && \
+    printf '%s\n' "$KNOR_RELEASE_MANIFEST_SHA256" > /usr/local/share/symba/release-manifest-sha256 && \
+    chmod 0444 /usr/local/share/symba/release-id /usr/local/share/symba/release-manifest-sha256
+LABEL org.opencontainers.image.version="${KNOR_RELEASE_ID}" \
+    org.opencontainers.image.revision="${KNOR_RELEASE_MANIFEST_SHA256}" \
+    com.amplior.release.id="${KNOR_RELEASE_ID}" \
+    com.amplior.release.manifest-sha256="${KNOR_RELEASE_MANIFEST_SHA256}"
+ENV KNOR_IMAGE_RELEASE_ID="${KNOR_RELEASE_ID}" \
+    KNOR_IMAGE_RELEASE_MANIFEST_SHA256="${KNOR_RELEASE_MANIFEST_SHA256}"
+
+USER 10001:10001
+ENTRYPOINT ["/usr/local/bin/symba-runtime-preflight"]
+

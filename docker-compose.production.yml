@@ -1,0 +1,189 @@
+# Production overlay: authenticated TLS gRPC plus loopback-only operator HTTP.
+# Apply explicitly after docker-compose.yml. It intentionally has no development
+# credential defaults and mounts certificate material read-only at runtime.
+services:
+  symba-postgres:
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
+      args:
+        KNOR_RELEASE_ID: ${KNOR_RELEASE_ID:?KNOR_RELEASE_ID must be set for production}
+        KNOR_RELEASE_MANIFEST_SHA256: ${KNOR_RELEASE_MANIFEST_SHA256:?KNOR_RELEASE_MANIFEST_SHA256 must be set for production}
+    image: symba-postgres:${KNOR_RELEASE_MANIFEST_SHA256:?KNOR_RELEASE_MANIFEST_SHA256 must be set for production}
+    command:
+      - postgres
+      - -c
+      - max_connections=300
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - effective_cache_size=2GB
+      - -c
+      - work_mem=16MB
+    environment:
+      KNOR_RELEASE_ID: ${KNOR_RELEASE_ID:?KNOR_RELEASE_ID must be set for production}
+      KNOR_RELEASE_MANIFEST_SHA256: ${KNOR_RELEASE_MANIFEST_SHA256:?KNOR_RELEASE_MANIFEST_SHA256 must be set for production}
+      SYMBA_RELEASE_REQUIRE_FINAL: "true"
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${SYMBA_POSTGRES_ADMIN_PASSWORD:?SYMBA_POSTGRES_ADMIN_PASSWORD must be set for production}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256 --auth-local=peer
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      SYMBA_POSTGRES_MIGRATION_PASSWORD: ${SYMBA_POSTGRES_MIGRATION_PASSWORD:?SYMBA_POSTGRES_MIGRATION_PASSWORD must be set for production}
+      SYMBA_POSTGRES_RUNTIME_PASSWORD: ${SYMBA_POSTGRES_RUNTIME_PASSWORD:?SYMBA_POSTGRES_RUNTIME_PASSWORD must be set for production}
+    healthcheck:
+      # Local peer auth is intentional; run the probe as the matching fixed OS
+      # identity instead of producing successful-but-noisy root auth failures.
+      test: ["CMD-SHELL", "exec gosu postgres pg_isready -U postgres -d postgres"]
+    depends_on:
+      symba-runtime-preflight:
+        condition: service_completed_successfully
+
+  symba-flyway:
+    build:
+      args:
+        KNOR_RELEASE_ID: ${KNOR_RELEASE_ID:?KNOR_RELEASE_ID must be set for production}
+        KNOR_RELEASE_MANIFEST_SHA256: ${KNOR_RELEASE_MANIFEST_SHA256:?KNOR_RELEASE_MANIFEST_SHA256 must be set for production}
+    image: symba-flyway:${KNOR_RELEASE_MANIFEST_SHA256:?KNOR_RELEASE_MANIFEST_SHA256 must be set for production}
+    environment:
+      KNOR_RELEASE_ID: ${KNOR_RELEASE_ID:?KNOR_RELEASE_ID must be set for production}
+      KNOR_RELEASE_MANIFEST_SHA256: ${KNOR_RELEASE_MANIFEST_SHA256:?KNOR_RELEASE_MANIFEST_SHA256 must be set for production}
+      SYMBA_RELEASE_REQUIRE_FINAL: "true"
+      FLYWAY_USER: symba_migrator
+      FLYWAY_PASSWORD: ${SYMBA_POSTGRES_MIGRATION_PASSWORD:?SYMBA_POSTGRES_MIGRATION_PASSWORD must be set for production}
+      HOME: /tmp
+      XDG_CACHE_HOME: /tmp/.cache
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m,mode=1770,uid=10001,gid=10001
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      symba-runtime-preflight:
+        condition: service_completed_successfully
+      symba-postgres:
+        condition: service_healthy
+
+  symba-redis:
+    environment:
+      REDIS_PASSWORD: ${SYMBA_REDIS_PASSWORD:?SYMBA_REDIS_PASSWORD must be set for production}
+    command:
+      - /bin/sh
+      - -ec
+      - exec redis-server --appendonly no --save '' --requirepass "$$REDIS_PASSWORD"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli --no-auth-warning ping
+    depends_on:
+      symba-runtime-preflight:
+        condition: service_completed_successfully
+
+  # Fail closed before the long-lived engine starts. Bind mounts preserve host
+  # numeric ownership, so a deployment-user-owned mode-0600 key is not readable
+  # by UID 10001. The engine-only key must be 10001:10001 mode 0600 and is still
+  # mounted read-only inside both this preflight and the engine.
+  symba-runtime-preflight:
+    build:
+      context: .
+      dockerfile: Dockerfile.tls-preflight
+      args:
+        KNOR_RELEASE_ID: ${KNOR_RELEASE_ID:?KNOR_RELEASE_ID must be set for production}
+        KNOR_RELEASE_MANIFEST_SHA256: ${KNOR_RELEASE_MANIFEST_SHA256:?KNOR_RELEASE_MANIFEST_SHA256 must be set for production}
+    image: symba-tls-preflight:${KNOR_RELEASE_MANIFEST_SHA256:?KNOR_RELEASE_MANIFEST_SHA256 must be set for production}
+    network_mode: none
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    environment:
+      KNOR_RELEASE_ID: ${KNOR_RELEASE_ID:?KNOR_RELEASE_ID must be set for production}
+      KNOR_RELEASE_MANIFEST_SHA256: ${KNOR_RELEASE_MANIFEST_SHA256:?KNOR_RELEASE_MANIFEST_SHA256 must be set for production}
+      SYMBA_RELEASE_REQUIRE_FINAL: "true"
+      SYMBA_POSTGRES_ADMIN_PASSWORD: ${SYMBA_POSTGRES_ADMIN_PASSWORD:?SYMBA_POSTGRES_ADMIN_PASSWORD must be set for production}
+      SYMBA_POSTGRES_MIGRATION_PASSWORD: ${SYMBA_POSTGRES_MIGRATION_PASSWORD:?SYMBA_POSTGRES_MIGRATION_PASSWORD must be set for production}
+      SYMBA_POSTGRES_RUNTIME_PASSWORD: ${SYMBA_POSTGRES_RUNTIME_PASSWORD:?SYMBA_POSTGRES_RUNTIME_PASSWORD must be set for production}
+      SYMBA_DEV_TOKEN: ${SYMBA_DEV_TOKEN:?SYMBA_DEV_TOKEN must be set for production}
+      SYMBA_REDIS_PASSWORD: ${SYMBA_REDIS_PASSWORD:?SYMBA_REDIS_PASSWORD must be set for production}
+      SYMBA_GRPC_TLS_EXPECTED_DNS_NAME: ${SYMBA_GRPC_TLS_EXPECTED_DNS_NAME:?SYMBA_GRPC_TLS_EXPECTED_DNS_NAME must be set for production}
+      SYMBA_GRPC_TLS_EXPECTED_IP: ${SYMBA_GRPC_TLS_EXPECTED_IP:?SYMBA_GRPC_TLS_EXPECTED_IP must be set for production}
+      SYMBA_GRPC_TLS_EXPECTED_CERT_SHA256: ${SYMBA_GRPC_TLS_EXPECTED_CERT_SHA256:?SYMBA_GRPC_TLS_EXPECTED_CERT_SHA256 must be set for production}
+      SYMBA_GRPC_TLS_EXPECTED_CA_SHA256: ${SYMBA_GRPC_TLS_EXPECTED_CA_SHA256:?SYMBA_GRPC_TLS_EXPECTED_CA_SHA256 must be set for production}
+      SYMBA_GRPC_TLS_MIN_REMAINING_SECONDS: ${SYMBA_GRPC_TLS_MIN_REMAINING_SECONDS:?SYMBA_GRPC_TLS_MIN_REMAINING_SECONDS must be set for production}
+      SYMBA_TLS_KEY_EXPECTED_OWNER: "10001:10001"
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=1m,mode=1770,uid=10001,gid=10001
+    volumes:
+      - ${SYMBA_GRPC_TLS_CERT_FILE_HOST:?SYMBA_GRPC_TLS_CERT_FILE_HOST must be set}:/run/secrets/symba/server.crt:ro
+      - ${SYMBA_GRPC_TLS_KEY_FILE_HOST:?SYMBA_GRPC_TLS_KEY_FILE_HOST must be set}:/run/secrets/symba/server.key:ro
+      - ${SYMBA_GRPC_TLS_CA_FILE_HOST:?SYMBA_GRPC_TLS_CA_FILE_HOST must be set}:/run/secrets/symba/ca.crt:ro
+    restart: "no"
+
+  symba-engine:
+    image: symba-engine:${KNOR_RELEASE_MANIFEST_SHA256:?KNOR_RELEASE_MANIFEST_SHA256 must be set for production}
+    build:
+      args:
+        KNOR_RELEASE_ID: ${KNOR_RELEASE_ID:?KNOR_RELEASE_ID must be set for production}
+        KNOR_RELEASE_MANIFEST_SHA256: ${KNOR_RELEASE_MANIFEST_SHA256:?KNOR_RELEASE_MANIFEST_SHA256 must be set for production}
+    environment:
+      KNOR_RELEASE_ID: ${KNOR_RELEASE_ID:?KNOR_RELEASE_ID must be set for production}
+      KNOR_RELEASE_MANIFEST_SHA256: ${KNOR_RELEASE_MANIFEST_SHA256:?KNOR_RELEASE_MANIFEST_SHA256 must be set for production}
+      SYMBA_RELEASE_REQUIRE_FINAL: "true"
+      HOME: /tmp
+      XDG_CACHE_HOME: /tmp/.cache
+      PYTHONDONTWRITEBYTECODE: "1"
+      SYMBA_APP__ENVIRONMENT: production
+      SYMBA_AUTH__MODE: token
+      SYMBA_AUTH__TOKENS: '{"${SYMBA_DEV_TOKEN:?SYMBA_DEV_TOKEN must be set for production}":"default"}'
+      SYMBA_POSTGRES__USER: symba_runtime
+      SYMBA_POSTGRES__PASSWORD: ${SYMBA_POSTGRES_RUNTIME_PASSWORD:?SYMBA_POSTGRES_RUNTIME_PASSWORD must be set for production}
+      SYMBA_REDIS__URL: redis://:${SYMBA_REDIS_PASSWORD:?SYMBA_REDIS_PASSWORD must be set for production}@symba-redis:6379/0
+      SYMBA_POSTGRES__HOT_COMMAND_TIMEOUT_S: "30"
+      SYMBA_POSTGRES__GENERAL_COMMAND_TIMEOUT_S: "60"
+      SYMBA_SERVER__GRPC_TLS_ENABLED: "true"
+      SYMBA_SERVER__GRPC_TLS_CERT_FILE: /run/secrets/symba/server.crt
+      SYMBA_SERVER__GRPC_TLS_KEY_FILE: /run/secrets/symba/server.key
+      SYMBA_SERVER__GRPC_TLS_REQUIRE_CLIENT_AUTH: "false"
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m,mode=1770,uid=10001,gid=10001
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      symba-runtime-preflight:
+        condition: service_completed_successfully
+    volumes:
+      - ${SYMBA_GRPC_TLS_CERT_FILE_HOST:?SYMBA_GRPC_TLS_CERT_FILE_HOST must be set}:/run/secrets/symba/server.crt:ro
+      - ${SYMBA_GRPC_TLS_KEY_FILE_HOST:?SYMBA_GRPC_TLS_KEY_FILE_HOST must be set}:/run/secrets/symba/server.key:ro
+
+  symba-frontend:
+    image: symba-frontend:${KNOR_RELEASE_MANIFEST_SHA256:?KNOR_RELEASE_MANIFEST_SHA256 must be set for production}
+    build:
+      args:
+        KNOR_RELEASE_ID: ${KNOR_RELEASE_ID:?KNOR_RELEASE_ID must be set for production}
+        KNOR_RELEASE_MANIFEST_SHA256: ${KNOR_RELEASE_MANIFEST_SHA256:?KNOR_RELEASE_MANIFEST_SHA256 must be set for production}
+    environment:
+      KNOR_RELEASE_ID: ${KNOR_RELEASE_ID:?KNOR_RELEASE_ID must be set for production}
+      KNOR_RELEASE_MANIFEST_SHA256: ${KNOR_RELEASE_MANIFEST_SHA256:?KNOR_RELEASE_MANIFEST_SHA256 must be set for production}
+      SYMBA_RELEASE_REQUIRE_FINAL: "true"
+    user: "101:101"
+    read_only: true
+    tmpfs:
+      # The upstream entrypoint must render the envsubst template at startup;
+      # cache, pid, and temporary paths are the only other writable locations.
+      - /etc/nginx/conf.d:rw,noexec,nosuid,nodev,size=1m,mode=0770,uid=101,gid=101
+      - /var/cache/nginx:rw,noexec,nosuid,nodev,size=32m,mode=0770,uid=101,gid=101
+      - /run:rw,noexec,nosuid,nodev,size=1m,mode=0770,uid=101,gid=101
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1770,uid=101,gid=101
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

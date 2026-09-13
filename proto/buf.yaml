@@ -9,6 +9,11 @@ lint:
     - RPC_REQUEST_STANDARD_NAME
     - RPC_RESPONSE_STANDARD_NAME
     - RPC_REQUEST_RESPONSE_UNIQUE
+  # These published enum names are part of the generated client API.
+  # Keep them compatible; all other STANDARD rules remain enforced.
+  ignore_only:
+    ENUM_VALUE_PREFIX:
+      - symba/v1/common.proto
 breaking:
   use:
     - FILE

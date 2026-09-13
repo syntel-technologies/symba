@@ -1,24 +1,12 @@
-// Symba submit-throughput baseline (M1 exit criteria, throughput requirement).
+// Symba HTTP submission baseline: 500 requests/s offered for 30 seconds.
+// This measures durable ingestion rate and HTTP latency, not sustained worker
+// completion throughput. The separate ready_to_claim.js phase tests claim latency
+// at 300 submissions/s after this phase drains. See README.md for scope and results.
 //
-// Written against the k6 v2 API (k6 crossed to v2 in 2026): options.thresholds,
-// http_reqs rate gate, and handleSummary() to persist the baseline JSON that the
-// nightly regression gate (fail on >20% claim-throughput regression)
-// compares against.
-//
-// WHAT THIS MEASURES
-//   The control-plane ingestion firehose: POST /v1/jobs. This is the front half of
-//   the claim pipeline (submit -> queued -> claim). The worker-side gRPC claim
-//   stream is benchmarked separately in the nightly gRPC suite; at M1 the meaningful,
-//   HTTP-drivable baseline is submit rate + submit latency, which is what feeds the
-//   claim scan and what the "10k-job burst drains" throughput scenario front-loads.
-//
-// RUN (against a compose-up engine on :8080)
+// Run only against an isolated stack with real gRPC workers:
 //   k6 run -e SYMBA_URL=http://localhost:8080 tests/load/submit_throughput.js
-//   # baseline is written to tests/load/baseline/submit_throughput.summary.json
-//
-// The thresholds below are the CI gate. Numbers are conservative M1 floors on a
-// single engine + PG18 (target: >=500 claims/s per engine; submit must comfortably
-// outpace claim so it is never the bottleneck). Tighten once real baseline data lands.
+// The unchanged absolute thresholds and the committed-baseline regression check
+// both gate nightly CI and engine artifact publication.
 
 import http from 'k6/http';
 import { check } from 'k6';
@@ -33,21 +21,17 @@ const TENANT = __ENV.SYMBA_TENANT || 'loadtest';
 const submitLatency = new Trend('symba_submit_latency_ms', true);
 
 export const options = {
+  summaryTrendStats: ["avg", "min", "med", "max", "p(90)", "p(95)", "p(99)"],
   scenarios: {
-    // Ramp to a sustained arrival rate, holding steady long enough for stable
-    // percentiles. arrival-rate (not fixed VUs) so the metric is req/s, not
-    // "as fast as N VUs happen to go".
+    // Measure the sustained 500/s target. Ramping the entire run previously
+    // averaged below 300/s, making the unchanged 450/s floor impossible.
     submit_firehose: {
-      executor: 'ramping-arrival-rate',
-      startRate: 100,
+      executor: 'constant-arrival-rate',
+      rate: 500,
       timeUnit: '1s',
+      duration: '30s',
       preAllocatedVUs: 50,
       maxVUs: 200,
-      stages: [
-        { duration: '10s', target: 200 }, // warm up
-        { duration: '30s', target: 500 }, // sustain at the throughput floor
-        { duration: '5s', target: 0 }, // ramp down
-      ],
     },
   },
   thresholds: {

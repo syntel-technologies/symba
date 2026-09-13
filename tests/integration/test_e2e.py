@@ -171,7 +171,7 @@ async def test_rest_submit_then_get(db: asyncpg.Connection, engine: EngineState)
         assert body["id"] == job_id and body["state"] == "succeeded"
         assert body["result"] == {"ok": True}
         # Job-detail FE fields — omitting these crashes the SPA on .length / viewers.
-        assert body["payload"] == {}
+        assert body["payload"] == {"hello": "world"}
         assert body["error_history"] == []
         assert "started_at" in body
 

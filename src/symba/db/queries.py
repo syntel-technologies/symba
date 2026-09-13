@@ -21,6 +21,8 @@ class Queries:
     """Loaded SQL, accessed as Q.CLAIM etc. Missing files fail loudly at import."""
 
     CLAIM = _load("claim")
+    PREPARE_GROUP_COUNTERS = _load("prepare_group_counters")
+    RUNNING_COUNTS_BY_WORKER = _load("running_counts_by_worker")
     SET_CLAIMED_BY = _load("set_claimed_by")
     SUBMIT = _load("submit")
     HEARTBEAT = _load("heartbeat")
@@ -34,6 +36,7 @@ class Queries:
     GET_JOB = _load("get_job")
     GET_RESULT = _load("get_result")
     SWEEP_LEASES = _load("sweep_leases")
+    LIST_EXHAUSTED_LEASES = _load("list_exhausted_leases")
     SWEEP_WAITS = _load("sweep_waits")
     SIGNAL = _load("signal")
     SIGNAL_INSERT = _load("signal_insert")

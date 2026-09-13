@@ -73,7 +73,7 @@ async def create_pools(cfg: PostgresConfig) -> Pools:
     # search_path on every pooled connection so unqualified SQL resolves there.
     server_settings = {"search_path": cfg.schema_name}
     hot = await asyncpg.create_pool(
-        dsn=cfg.dsn,
+        dsn=cfg.resolved_dsn,
         min_size=2,
         max_size=cfg.hot_pool_size,
         command_timeout=cfg.hot_command_timeout_s,
@@ -81,7 +81,7 @@ async def create_pools(cfg: PostgresConfig) -> Pools:
         init=_init_connection,
     )
     general = await asyncpg.create_pool(
-        dsn=cfg.dsn,
+        dsn=cfg.resolved_dsn,
         min_size=2,
         max_size=cfg.general_pool_size,
         command_timeout=cfg.general_command_timeout_s,

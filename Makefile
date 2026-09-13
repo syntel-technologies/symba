@@ -1,4 +1,4 @@
-.PHONY: proto test lint typecheck run imports l1 l2 up down migrate openapi openapi-check frontend
+.PHONY: proto ensure-proto test lint typecheck run imports l1 l2 up down migrate openapi openapi-check frontend
 
 PY := .venv/bin/python
 
@@ -8,6 +8,10 @@ proto:
 		proto/symba/v1/*.proto
 	# move generated symba/v1 up into the package
 	@rm -rf src/symba/v1_gen && true
+
+# Host-side codegen for bare `uv run` / pytest (Docker builds run this in Dockerfile).
+ensure-proto:
+	@test -f src/symba/v1/data_plane_pb2.py || $(MAKE) proto
 
 imports:
 	$(PY) tools/check_imports.py
@@ -39,7 +43,7 @@ down:
 migrate:
 	docker compose run --rm flyway migrate
 
-run:
+run: ensure-proto
 	$(PY) -m symba.main
 
 # Regenerate the committed OpenAPI schema (frontend/openapi.json). Run after any

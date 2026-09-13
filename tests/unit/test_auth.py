@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from symba.config import AuthConfig
+from symba.config import AppConfig, AuthConfig, ServerConfig, SymbaConfig
 from symba.core.errors import Unauthenticated
 from symba.transport.auth import build_authenticator
 
@@ -103,9 +103,7 @@ class TestTokenMode:
 
     def test_no_tokens_and_no_jwks_refuses_any_bearer(self) -> None:
         with pytest.raises(Unauthenticated):
-            _auth(mode="token").authenticate(
-                authorization="Bearer anything", tenant_header=None, peer_ip="10.0.0.5"
-            )
+            _auth(mode="token").authenticate(authorization="Bearer anything", tenant_header=None, peer_ip="10.0.0.5")
 
 
 class TestMtlsMode:
@@ -121,3 +119,37 @@ class TestMtlsMode:
     def test_blank_tenant_identity_refused(self) -> None:
         with pytest.raises(Unauthenticated):
             _auth(mode="mtls").authenticate(authorization=None, tenant_header="   ", peer_ip="10.0.0.5")
+
+
+class TestProductionConfiguration:
+    def test_none_mode_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="require auth.mode"):
+            SymbaConfig(
+                app=AppConfig(environment="production"),
+                auth=AuthConfig(mode="none"),
+            )
+
+    def test_token_mode_requires_a_verifier(self) -> None:
+        with pytest.raises(ValueError, match="requires a non-empty shared secret"):
+            SymbaConfig(
+                app=AppConfig(environment="production"),
+                auth=AuthConfig(mode="token"),
+            )
+
+    @pytest.mark.parametrize(
+        "auth",
+        [
+            AuthConfig(mode="token", tokens={"secret": "default"}),
+            AuthConfig(mode="token", token_jwks_url="https://issuer.example/jwks"),
+            AuthConfig(mode="mtls"),
+        ],
+    )
+    def test_authenticated_production_modes_are_accepted(self, auth: AuthConfig) -> None:
+        server = ServerConfig(
+            grpc_tls_enabled=True,
+            grpc_tls_cert_file="/run/secrets/server.crt",
+            grpc_tls_key_file="/run/secrets/server.key",
+            grpc_tls_require_client_auth=auth.mode == "mtls",
+            grpc_tls_client_ca_file=("/run/secrets/client-ca.crt" if auth.mode == "mtls" else ""),
+        )
+        SymbaConfig(app=AppConfig(environment="production"), auth=auth, server=server)

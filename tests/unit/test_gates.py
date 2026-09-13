@@ -61,3 +61,9 @@ def test_unknown_policy_raises():
 def test_inconsistent_progress_rejected(args: tuple[int, int, int]):
     with pytest.raises(ValueError):
         GateProgress(*args)
+
+
+@pytest.mark.parametrize("failed", [-1, 2])
+def test_failed_children_cannot_be_negative_or_overlap_successes(failed):
+    with pytest.raises(ValueError, match="inconsistent"):
+        GateProgress(expected=3, completed=3, succeeded=2, failed=failed)

@@ -2,6 +2,6 @@
 
 __version__ = "0.1.0"
 
-# Wire protocol version = engine MAJOR.MINOR. The engine advertises this in
-# handshakes and rejects SDK versions outside its supported range.
+# Wire compatibility is versioned deliberately, independently of package releases.
+# Change it with a reviewed protocol migration, not an automatic packaging bump.
 PROTOCOL_VERSION = "0.1"

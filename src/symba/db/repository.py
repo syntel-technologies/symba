@@ -29,6 +29,7 @@ from symba.db.records import (
     CronDue,
     CronRow,
     EventRow,
+    ExhaustedLease,
     InlineUpstream,
     JobListItem,
     JobRow,
@@ -96,17 +97,47 @@ async def claim(
     limit: int,
     claimed_by: str,
     per_group_cap: int,
+    rate_quotas: dict[str, int] | None = None,
 ) -> list[ClaimedJob]:
-    """THE hot query. One transaction; caller opens it."""
-    rows = await conn.fetch(
-        Q.CLAIM,
-        worker_tags,
-        exhausted_rate_classes,
-        limit,
-        claimed_by,
-        per_group_cap,
-    )
+    """Atomically claim jobs while enforcing exact per-group headroom.
+
+    The preparation statement initializes missing counters; ``claim.sql`` then
+    locks each selected capped group, consumes only its remaining headroom, and
+    moves chosen rows to ``running``. The nested transaction makes those two
+    statements atomic both for direct callers and callers with a surrounding
+    service transaction.
+    """
+    quotas = rate_quotas or {}
+    async with conn.transaction():
+        await conn.execute(
+            Q.PREPARE_GROUP_COUNTERS,
+            worker_tags,
+            exhausted_rate_classes,
+            limit,
+            quotas,
+        )
+        rows = await conn.fetch(
+            Q.CLAIM,
+            worker_tags,
+            exhausted_rate_classes,
+            limit,
+            claimed_by,
+            per_group_cap,
+            quotas,
+        )
     return [_to_claimed(r) for r in rows]
+
+
+async def running_counts_by_worker(
+    conn: asyncpg.Connection,
+    *,
+    worker_ids: list[str],
+) -> dict[str, int]:
+    """Return live attributed-job counts for the requested workers."""
+    if not worker_ids:
+        return {}
+    rows = await conn.fetch(Q.RUNNING_COUNTS_BY_WORKER, worker_ids)
+    return {str(row["worker_id"]): int(row["running_count"]) for row in rows}
 
 
 async def set_claimed_by(
@@ -195,9 +226,14 @@ async def insert_continuation(
 ) -> str:
     """Statement 3 of Complete: enqueue the chain continuation.
 
-    Runs in the SAME tx as the terminal move. Inherits lineage + routing +
-    on_failure from the just-succeeded predecessor so the chain stays in one
-    pipeline/lane/stage and a DEAD tail still fires the submitter's failure hook.
+    Runs in the SAME tx as the terminal move. Inherits lineage, worker routing,
+    and on_failure from the just-succeeded predecessor so the chain stays in one
+    pipeline/stage and a DEAD tail still fires the submitter's failure hook.
+
+    ``rate_class`` is deliberately job-local admission metadata, not chain
+    routing. A continuation must declare its own class when it performs another
+    provider call; blindly inheriting the predecessor's class spends quota on
+    DB-only apply/finalize tails.
     """
     new_id = await conn.fetchval(
         Q.COMPLETE_CONTINUATION,
@@ -212,16 +248,14 @@ async def insert_continuation(
         predecessor.group_key,
         predecessor.max_concurrent_per_group,
         predecessor.runs_on,
-        predecessor.rate_class,
+        None,
         predecessor.lease_ttl_s,
         predecessor.on_failure,
     )
     return str(new_id)
 
 
-async def fetch_inline_upstream(
-    conn: asyncpg.Connection, *, job_ids: list[str]
-) -> dict[str, list[InlineUpstream]]:
+async def fetch_inline_upstream(conn: asyncpg.Connection, *, job_ids: list[str]) -> dict[str, list[InlineUpstream]]:
     """Batch-load the Job.upstream inline tier for a claim assignment batch.
 
     Returns asking_job_id -> producers (chain predecessor + depends_on). Empty
@@ -279,8 +313,9 @@ async def create_gate(
 
 
 @dataclass(slots=True)
-class GateFire:
-    fired: bool
+class GateResolution:
+    resolved: bool
+    satisfied: bool
     on_complete: dict[str, Any]
     tenant: str
     ctx_id: str | None
@@ -292,11 +327,13 @@ class GateFire:
 
 async def bump_gate(
     conn: asyncpg.Connection, *, gate_id: str, child_succeeded: bool, child_failed: bool
-) -> GateFire | None:
-    """Settle one child into its gate; claim-once fire.
+) -> GateResolution | None:
+    """Settle one child into its gate; claim resolution exactly once.
 
     Returns None when the gate row is gone (never happens in a healthy tx). The
-    `fired` flag is True for exactly the tx that crossed the policy threshold.
+    `resolved` flag is True for exactly the tx that either satisfied the policy
+    or proved it unsatisfied by settling the final child. `satisfied` selects the
+    success continuation versus its nested on_failure hook.
 
     Outcome encoding (spec 7.2): success -> (True, False); dead -> (False, True);
     skip -> (False, False) — a non-failure no-op that advances only
@@ -305,8 +342,9 @@ async def bump_gate(
     row = await conn.fetchrow(Q.BUMP_GATE, gate_id, child_succeeded, child_failed)
     if row is None:
         return None
-    return GateFire(
-        fired=bool(row["fired"]),
+    return GateResolution(
+        resolved=bool(row["resolved"]),
+        satisfied=bool(row["satisfied"]),
         on_complete=row["on_complete"],
         tenant=row["tenant"],
         ctx_id=row["ctx_id"],
@@ -336,14 +374,12 @@ async def gate_child_results(conn: asyncpg.Connection, *, gate_id: str) -> list[
 class GateStatusRow:
     gate_id: str
     expected: int
-    terminal: int          # completed_children (succeeded + failed + skipped)
-    succeeded: int         # excludes skips + failures
+    terminal: int  # completed_children (succeeded + failed + skipped)
+    succeeded: int  # excludes skips + failures
     fired_at: datetime | None
 
 
-async def get_gate(
-    conn: asyncpg.Connection, *, tenant: str, gate_id: str
-) -> GateStatusRow | None:
+async def get_gate(conn: asyncpg.Connection, *, tenant: str, gate_id: str) -> GateStatusRow | None:
     """Read the authoritative gate aggregate for Gate.status() (spec 7.2)."""
     row = await conn.fetchrow(Q.GET_GATE, tenant, gate_id)
     if row is None:
@@ -511,9 +547,25 @@ async def record_event(
     await conn.execute(Q.RECORD_EVENT, job_id, event, detail)
 
 
-async def sweep_leases(conn: asyncpg.Connection, *, limit: int) -> int:
-    """Reclaim expired leases. Returns rows reclaimed."""
-    return await conn.fetchval(Q.SWEEP_LEASES, limit) or 0
+async def sweep_leases(
+    conn: asyncpg.Connection,
+    *,
+    limit: int,
+    stale_worker_grace_s: int = 45,
+) -> int:
+    """Reclaim expired leases and jobs abandoned by a missing worker."""
+    return await conn.fetchval(Q.SWEEP_LEASES, limit, stale_worker_grace_s) or 0
+
+
+async def list_exhausted_leases(
+    conn: asyncpg.Connection,
+    *,
+    limit: int,
+    stale_worker_grace_s: int = 45,
+) -> list[ExhaustedLease]:
+    """Return abandoned running jobs that have consumed every attempt."""
+    rows = await conn.fetch(Q.LIST_EXHAUSTED_LEASES, limit, stale_worker_grace_s)
+    return [ExhaustedLease(job_id=str(row["id"]), lease_token=str(row["lease_token"])) for row in rows]
 
 
 async def sweep_waits(conn: asyncpg.Connection, *, limit: int) -> list[str]:
@@ -729,16 +781,34 @@ async def list_jobs(
     offset: int,
     claimed_by: str | None = None,
     parent_gate_id: str | None = None,
+    pipeline: str | None = None,
+    stage: str | None = None,
+    group_key: str | None = None,
+    created_after: datetime | None = None,
 ) -> list[JobListItem]:
     """Paged, filtered job list across hot + archive (UI views)."""
     rows = await conn.fetch(
-        Q.LIST_JOBS, tenant, state, task_name, ctx_id, limit, offset, claimed_by, parent_gate_id
+        Q.LIST_JOBS,
+        tenant,
+        state,
+        task_name,
+        ctx_id,
+        limit,
+        offset,
+        claimed_by,
+        parent_gate_id,
+        pipeline,
+        stage,
+        group_key,
+        created_after,
     )
     return [
         JobListItem(
             id=str(r["id"]),
             tenant=r["tenant"],
             task_name=r["task_name"],
+            pipeline=r["pipeline"],
+            stage=r["stage"],
             state=r["state"],
             attempt=r["attempt"],
             priority=r["priority"],
@@ -782,6 +852,7 @@ async def list_workers(conn: asyncpg.Connection) -> list[WorkerRow]:
         WorkerRow(
             worker_id=r["worker_id"],
             tags=list(r["tags"]),
+            registered_tasks=list(r["registered_tasks"]),
             labels=r["labels"] or {},
             slots=r["slots"],
             slots_busy=r["slots_busy"],
@@ -797,12 +868,13 @@ async def worker_upsert(
     *,
     worker_id: str,
     tags: list[str],
+    registered_tasks: list[str],
     labels: dict[str, Any],
     slots: int,
     slots_busy: int,
 ) -> None:
     """Persist/refresh one live worker into the fleet read model."""
-    await conn.execute(Q.WORKER_UPSERT, worker_id, tags, labels, slots, slots_busy)
+    await conn.execute(Q.WORKER_UPSERT, worker_id, tags, registered_tasks, labels, slots, slots_busy)
 
 
 async def worker_delete(conn: asyncpg.Connection, *, worker_id: str) -> None:

@@ -23,6 +23,51 @@ below maps to a shipped Prometheus rule and a concrete first action.
 `readyz` failing on boot ⇒ almost always migrations behind or Postgres unreachable.
 Check the Flyway sidecar (`docker compose logs flyway`) and `schema_migrations`.
 
+### 1.1 Production container admission
+
+Render production only with both Compose files and a private environment file:
+
+```bash
+docker compose --env-file .env -p symba \
+  -f docker-compose.yml -f docker-compose.production.yml config --quiet
+```
+
+The production overlay fixes Flyway and the engine at UID/GID `10001:10001`,
+drops every capability, enables `no-new-privileges`, makes the image filesystem
+read-only, and provides only a bounded `noexec,nosuid,nodev` `/tmp`. Both use
+`HOME=/tmp` and `XDG_CACHE_HOME=/tmp/.cache`; the engine also suppresses Python
+bytecode writes. Before startup, prove the rendered runtime boundary without
+starting a long-lived service:
+
+```bash
+docker compose --env-file .env -p symba \
+  -f docker-compose.yml -f docker-compose.production.yml \
+  run --rm --no-deps --entrypoint /bin/sh symba-flyway -ec \
+  'test "$(id -u):$(id -g)" = "10001:10001"; if touch /var/tmp/.rootfs-write-probe 2>/dev/null; then rm -f /var/tmp/.rootfs-write-probe; exit 1; fi; probe=/tmp/.write-probe; : > "$probe"; rm -f "$probe"'
+docker compose --env-file .env -p symba \
+  -f docker-compose.yml -f docker-compose.production.yml \
+  run --rm --no-deps --entrypoint /bin/sh symba-engine -ec \
+  'test "$(id -u):$(id -g)" = "10001:10001"; test -s /run/secrets/symba/server.crt; test -r /run/secrets/symba/server.crt; test -s /run/secrets/symba/server.key; test -r /run/secrets/symba/server.key; test ! -w /run/secrets/symba/server.key; if touch /app/.rootfs-write-probe 2>/dev/null; then rm -f /app/.rootfs-write-probe; exit 1; fi; probe=/tmp/.write-probe; : > "$probe"; rm -f "$probe"'
+```
+
+The TLS private key must remain readable by the fixed engine identity. Install
+it as a regular file owned by numeric UID/GID `10001:10001` with mode `0600`
+(a public certificate may be `0644`), and ensure its host parent directories
+are traversable. Never make the key group- or world-readable. A key that is
+mode `0600` for an unrelated deployment account will correctly fail
+`symba-runtime-preflight`; the engine depends on that one-shot completing
+successfully. Reinstall the key with the fixed numeric identity rather than
+restoring root execution or weakening its mode.
+
+The frontend is also non-root (`101:101`) with all capabilities dropped. It
+listens on unprivileged container port `8080`, so it does not need
+`NET_BIND_SERVICE`. Its root filesystem is read-only; the only exception is
+bounded tmpfs for `/etc/nginx/conf.d`, `/var/cache/nginx`, `/run`, and `/tmp`.
+The first path is required because the upstream nginx entrypoint renders the
+environment-substituted proxy template there at every start. Removing that
+tmpfs or reverting the container target to port `80` breaks the non-root
+entrypoint contract.
+
 ---
 
 ## 2. Alert → cause → action

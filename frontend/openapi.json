@@ -964,6 +964,13 @@
             "title": "Last Seen",
             "type": "string"
           },
+          "registered_tasks": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Registered Tasks",
+            "type": "array"
+          },
           "slots": {
             "title": "Slots",
             "type": "integer"
@@ -991,6 +998,7 @@
         "required": [
           "worker_id",
           "tags",
+          "registered_tasks",
           "labels",
           "slots",
           "slots_busy",

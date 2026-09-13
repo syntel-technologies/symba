@@ -8,6 +8,10 @@ on:
   schedule:
     - cron: "0 3 * * *" # 03:00 UTC daily
   workflow_dispatch: {}
+  workflow_call: {}
+
+permissions:
+  contents: read
 
 env:
   UV_VERSION: "0.11"
@@ -18,6 +22,7 @@ jobs:
     # Scenarios 1-2: crash convergence + effect-once. Run against a real
     # Postgres 18 exactly like the L2 job.
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:18.1
@@ -32,42 +37,81 @@ jobs:
     env:
       SYMBA_POSTGRES__DSN: postgresql://symba:symba@localhost:5432/symba
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: ${{ env.UV_VERSION }}
-      - run: uv python install ${{ env.PYTHON_VERSION }}
-      - run: uv pip install --system -e ".[dev]"
-      - name: L5 chaos scenarios 1-2
-        run: pytest -m l5 -q
-      - name: L6 dispatcher latency floor (worker-free, DB-clock)
-        run: pytest -m l6 -q
+      - run: uv sync --frozen --extra dev --python ${{ env.PYTHON_VERSION }}
+      - run: make proto
+      - name: Chaos convergence and dispatcher latency
+        # One session applies the schema once to the isolated service database.
+        run: uv run --no-sync pytest -m 'l5 or l6' -q
 
   load-l6:
     # Submit-throughput baseline. Brings the full stack
     # up via compose, warms it, runs k6 v2, and compares against the committed baseline.
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv sync --frozen --extra dev --python ${{ env.PYTHON_VERSION }}
+      - run: make proto
       - name: bring the stack up (engine + PG18 + flyway)
-        run: docker compose up -d --wait
+        run: docker compose up --build -d --wait
       - name: install k6 v2
         run: |
           curl -fsSL https://github.com/grafana/k6/releases/download/v2.0.0/k6-v2.0.0-linux-amd64.tar.gz \
             | tar -xz --strip-components=1 -C /usr/local/bin k6-v2.0.0-linux-amd64/k6
           k6 version
+      - name: Start the real echo worker fleet
+        run: |
+          for worker in 0 1 2 3; do
+            uv run --no-sync python tools/ci_load_worker.py 127.0.0.1:7233 "ci-load-echo-$worker" 64 > "/tmp/ci-load-worker-$worker.log" 2>&1 &
+          done
+      - name: Warm connections and require successful work before measuring
+        id: warmup
+        run: uv run --no-sync python tools/ci_load_prepare.py http://localhost:8080
+      - name: Capture benchmark resource usage
+        run: |
+          docker stats --format '{{json .}}' > /tmp/load-docker-stats.jsonl &
+          vmstat 1 > /tmp/load-vmstat.txt &
       - name: k6 submit-throughput (thresholds are the pass/fail gate)
-        run: k6 run -e SYMBA_URL=http://localhost:8080 tests/load/submit_throughput.js
+        id: submit
+        run: k6 run --out json=/tmp/load-submit.json.gz -e SYMBA_URL=http://localhost:8080 tests/load/submit_throughput.js
+      - name: Require the submission phase to drain
+        id: drain
+        if: ${{ !cancelled() && steps.warmup.outcome == 'success' }}
+        run: uv run --no-sync python tools/ci_load_prepare.py http://localhost:8080 --drain-only
       - name: k6 ready-to-claim p95 (busy-system scenario, target < 150ms)
+        if: ${{ !cancelled() && steps.drain.outcome == 'success' }}
         run: k6 run -e SYMBA_URL=http://localhost:8080 tests/load/ready_to_claim.js
       - name: regression gate vs committed baseline (>20% drop fails)
-        run: python tools/load_regression_gate.py
+        run: uv run --no-sync python tools/load_regression_gate.py
+      - name: Capture final engine metrics
+        if: always()
+        run: curl --fail --max-time 5 http://localhost:8080/metrics -o /tmp/load-engine-metrics.txt || true
+      - name: Upload benchmark diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: load-diagnostics
+          path: /tmp/load-*
+          retention-days: 7
       - name: upload run summaries
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: k6-summaries
           path: tests/load/baseline/*.summary.json
       - name: engine logs on failure
         if: failure()
-        run: docker compose logs engine
+        run: docker compose logs --tail=200 symba-engine
+      - name: Worker diagnostics
+        if: failure()
+        run: cat /tmp/ci-load-worker-*.log
+      - name: Stop isolated CI stack
+        if: always()
+        run: docker compose down --volumes

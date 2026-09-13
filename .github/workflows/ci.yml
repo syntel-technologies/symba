@@ -4,8 +4,13 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -18,33 +23,40 @@ env:
 jobs:
   lint-type-imports:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: ${{ env.UV_VERSION }}
-      - run: uv python install ${{ env.PYTHON_VERSION }}
-      - run: uv pip install --system -e ".[dev]"
+      - run: uv lock --check
+      - run: uv sync --frozen --extra dev --python ${{ env.PYTHON_VERSION }}
+      - run: make proto
       - name: ruff lint
-        run: ruff check src tests tools
+        run: uv run --no-sync ruff check src tests tools
       - name: ruff format check
-        run: ruff format --check src tests tools
+        run: uv run --no-sync ruff format --check src tests tools
       - name: pyright
-        run: pyright
+        run: uv run --no-sync pyright
       - name: import gate (core purity + logging)
-        run: python tools/check_imports.py
+        run: uv run --no-sync python tools/check_imports.py
       - name: OpenAPI drift gate (UI client cannot silently diverge)
-        run: python tools/check_openapi.py
+        run: uv run --no-sync python tools/check_openapi.py
 
   proto:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0            # buf breaking needs history
-      - uses: bufbuild/buf-action@v1
+      - uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1
         with:
           input: proto
+          version: 1.73.0
+          pr_comment: false
+          push: false
+          format: true
           lint: true
           breaking: true
           breaking_against: "https://github.com/${{ github.repository }}.git#branch=main,subdir=proto"
@@ -52,20 +64,22 @@ jobs:
   test-l1:
     # Pure-logic unit tests: no services, fast, must be 100% deterministic.
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: ${{ env.UV_VERSION }}
-      - run: uv python install ${{ env.PYTHON_VERSION }}
-      - run: uv pip install --system -e ".[dev]"
+      - run: uv sync --frozen --extra dev --python ${{ env.PYTHON_VERSION }}
+      - run: make proto
       - name: L1 unit tests + coverage gate
-        run: pytest -m l1 --cov=symba.core --cov-fail-under=100 -q
+        run: uv run --no-sync pytest tests/unit --cov=symba.core --cov-fail-under=100 -q
 
   migrations:
     # Validate the exact Flyway path prod uses: run the Flyway image against a
     # real Postgres 18 with the versioned SQL from database/symba.
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:18.1
@@ -78,7 +92,7 @@ jobs:
           --health-cmd "pg_isready -U symba"
           --health-interval 2s --health-timeout 3s --health-retries 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: flyway migrate
         run: |
           docker run --rm --network host \
@@ -92,7 +106,7 @@ jobs:
             -e FLYWAY_DEFAULT_SCHEMA=symba \
             -e FLYWAY_CREATE_SCHEMAS=true \
             flyway/flyway:12.0.1 migrate
-      - name: flyway info (assert 7 versioned migrations applied)
+      - name: flyway info (applied migration inventory)
         run: |
           docker run --rm --network host \
             -v "${{ github.workspace }}/flyway.toml:/flyway/conf/flyway.toml:ro" \
@@ -108,6 +122,7 @@ jobs:
   test-l2:
     # Integration tests against a real Postgres 18 + Redis (testcontainers).
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:18.1
@@ -129,13 +144,77 @@ jobs:
       SYMBA_POSTGRES__DSN: postgresql://symba:symba@localhost:5432/symba
       SYMBA_REDIS__URL: redis://localhost:6379/0
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: ${{ env.UV_VERSION }}
-      - run: uv python install ${{ env.PYTHON_VERSION }}
-      - run: uv pip install --system -e ".[dev]"
+      - run: uv sync --frozen --extra dev --python ${{ env.PYTHON_VERSION }}
+      - run: make proto
       - name: L2 integration tests
-        run: pytest -m l2 -q
+        run: uv run --no-sync pytest -m 'l2 or l3' -q
+      - name: Give the query-plan gate a fresh database
+        run: docker exec '${{ job.services.postgres.id }}' createdb -U symba symba_explain
       - name: EXPLAIN gate (claim must use ix_jobs_claimable, no Seq Scan)
-        run: python tools/explain_gate.py
+        env:
+          SYMBA_POSTGRES__DSN: postgresql://symba:symba@localhost:5432/symba_explain
+        run: uv run --no-sync python tools/explain_gate.py
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  repository-hygiene:
+    name: Workflow and secret checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install checksum-pinned quality tools
+        run: |
+          mkdir -p "$RUNNER_TEMP/quality-tools"
+          cd "$RUNNER_TEMP/quality-tools"
+          curl --fail --silent --show-error --location "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz" --output "gitleaks_8.30.1_linux_x64.tar.gz"
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks_8.30.1_linux_x64.tar.gz" | sha256sum --check --strict
+          tar -xzf "gitleaks_8.30.1_linux_x64.tar.gz" gitleaks
+          curl --fail --silent --show-error --location "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz" --output "actionlint_1.7.12_linux_amd64.tar.gz"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint_1.7.12_linux_amd64.tar.gz" | sha256sum --check --strict
+          tar -xzf "actionlint_1.7.12_linux_amd64.tar.gz" actionlint
+      - name: Validate all GitHub workflows
+        run: '"$RUNNER_TEMP/quality-tools/actionlint" -shellcheck=""'
+      - name: Scan committed history without revealing secret values
+        run: '"$RUNNER_TEMP/quality-tools/gitleaks" git --redact --no-banner'
+
+  required-checks:
+    name: Required checks
+    if: always()
+    needs: [lint-type-imports, proto, test-l1, migrations, test-l2, frontend, repository-hygiene]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Fail unless every mandatory job succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PYCODE'
+          import json, os, sys
+          failed = {name: job['result'] for name, job in json.loads(os.environ['RESULTS']).items() if job['result'] != 'success'}
+          if failed:
+              sys.exit(f'Required checks did not succeed: {failed}')
+          PYCODE

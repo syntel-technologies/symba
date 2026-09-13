@@ -72,9 +72,7 @@ async def test_wait_first_parks_then_signal_resumes_once(db: asyncpg.Connection,
 # ── signal-first: the signal is parked, then the wait consumes it ─────────────
 
 
-async def test_signal_first_parks_then_wait_consumes_without_parking(
-    db: asyncpg.Connection, pools: Pools
-) -> None:
+async def test_signal_first_parks_then_wait_consumes_without_parking(db: asyncpg.Connection, pools: Pools) -> None:
     svc = _svc(pools)
     # The signal arrives BEFORE anyone waits -> parked in `signals`, no job to wake.
     sig = await svc.signal(tenant="default", wait_key="webhook-7", payload={"ok": True})
@@ -155,8 +153,6 @@ async def test_wait_with_stale_lease_is_rejected(db: asyncpg.Connection, pools: 
     await _run(db, job_id)  # a valid worker owns it
 
     with pytest.raises(StaleLease):
-        await svc.wait(
-            job_id=job_id, lease_token="not-the-real-token", tenant="default", wait_key="k", timeout_s=60
-        )
+        await svc.wait(job_id=job_id, lease_token="not-the-real-token", tenant="default", wait_key="k", timeout_s=60)
     # The job is untouched — still running under the real lease.
     assert await db.fetchval("SELECT state FROM jobs WHERE id = $1", job_id) == "running"

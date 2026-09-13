@@ -34,8 +34,10 @@ const TENANT = __ENV.SYMBA_TENANT || 'loadtest';
 // and recorded as a single-sample trend so it lands in the baseline JSON with a
 // stable key.
 const readyToClaimP95 = new Trend('symba_ready_to_claim_p95_ms', true);
+const claimSamples = new Trend('symba_claim_samples');
 
 export const options = {
+  summaryTrendStats: ["avg", "min", "med", "max", "p(90)", "p(95)", "p(99)"],
   scenarios: {
     // Steady submit pressure so the dispatcher is continuously matching against
     // the worker fleet — the "busy system" half of the latency floor (vs the idle floor).
@@ -50,10 +52,19 @@ export const options = {
   },
   thresholds: {
     http_req_failed: ['rate<0.01'],
+    iterations: ['count>=11880'], // at least 99% of 300/s for 40 seconds
+    checks: ['rate==1'],
+    symba_claim_samples: ['min>=11880'],
     // The latency floor, read from the engine's own histogram (see handleSummary).
     symba_ready_to_claim_p95_ms: ['p(95)<150'],
   },
 };
+
+export function setup() {
+  const res = http.get(`${SYMBA_URL}/metrics`);
+  if (res.status !== 200) throw new Error('Cannot capture initial claim histogram');
+  return { metrics: res.body };
+}
 
 export default function () {
   const body = JSON.stringify({
@@ -69,14 +80,14 @@ export default function () {
 
 // teardown scrapes /metrics once the fleet has drained the sustained load, parses the
 // ready-to-claim histogram, and records its p95 so the threshold above can gate on it.
-export function teardown() {
+export function teardown(initial) {
   // Let the last submitted jobs get claimed before reading the histogram.
   sleep(2);
   const res = http.get(`${SYMBA_URL}/metrics`);
   if (res.status !== 200) {
     throw new Error(`could not scrape /metrics: HTTP ${res.status}`);
   }
-  const p95 = histogramQuantile(res.body, 'symba_ready_to_claim_ms', 0.95);
+  const p95 = histogramQuantile(res.body, 'symba_ready_to_claim_ms', 0.95, initial.metrics);
   if (p95 === null) {
     throw new Error('no symba_ready_to_claim_ms samples on /metrics — are workers claiming?');
   }
@@ -86,19 +97,29 @@ export function teardown() {
 // Coarse Prometheus histogram_quantile over the exposition-format bucket lines:
 //   symba_ready_to_claim_ms_bucket{le="150"} 1234
 // Returns the upper bound of the first bucket whose cumulative count crosses q*total,
-// the same estimate PromQL's histogram_quantile gives — enough for a floor gate.
-function histogramQuantile(body, metric, q) {
+// a conservative upper bound, not PromQL's interpolated histogram_quantile.
+// A pass proves the percentile is below the gate; a boundary-bucket failure may
+// need finer buckets to distinguish values around the threshold.
+function histogramQuantile(body, metric, q, initial) {
   const bucketRe = new RegExp(`^${metric}_bucket\\{[^}]*le="([^"]+)"\\}\\s+([0-9.e+]+)`);
+  // Counters are cumulative. Exclude warm-up and the previous 500/s phase.
+  const prior = new Map();
+  for (const line of initial.split('\n')) {
+    const m = line.match(bucketRe);
+    if (m) prior.set(m[1], parseFloat(m[2]));
+  }
   const buckets = [];
   let total = 0;
   for (const line of body.split('\n')) {
     const m = line.match(bucketRe);
     if (!m) continue;
     const le = m[1] === '+Inf' ? Infinity : parseFloat(m[1]);
-    const count = parseFloat(m[2]);
+    const count = parseFloat(m[2]) - (prior.get(m[1]) || 0);
+    if (count < 0) throw new Error('Claim histogram reset during the benchmark');
     buckets.push([le, count]);
     if (le === Infinity) total = count;
   }
+  claimSamples.add(total);
   if (total === 0) return null;
   buckets.sort((a, b) => a[0] - b[0]);
   const target = q * total;

@@ -1,0 +1,93 @@
+{
+  "measured_at": "2026-09-13",
+  "workflow_run": "https://github.com/syntel-technologies/symba/actions/runs/34763666367",
+  "engine_revision": "e7ccb890a879a432b01d15a4a01ec08471afa10b",
+  "conclusion": "success",
+  "environment": {
+    "runner": "GitHub-hosted ubuntu-latest",
+    "postgres": "18.1",
+    "python": "3.13",
+    "k6": "2.0.0",
+    "workers": 4,
+    "slots_per_worker": 64,
+    "warmup_jobs": 500,
+    "co_located": "engine, PostgreSQL, Redis, proxy, k6 and real gRPC echo workers"
+  },
+  "phases": {
+    "submission": {
+      "offered_requests_per_second": 500,
+      "duration_seconds": 30,
+      "metrics": {
+        "http_reqs": {
+          "count": 15001,
+          "rate": 499.75626950700683
+        },
+        "symba_submit_latency_ms": {
+          "avg": 24.041062332111135,
+          "min": 1.791317,
+          "med": 25.547566,
+          "max": 128.399719,
+          "p(90)": 34.979534,
+          "p(95)": 40.479507,
+          "p(99)": 56.697067
+        },
+        "checks": {
+          "rate": 1,
+          "passes": 30002,
+          "fails": 0
+        },
+        "http_req_failed": {
+          "rate": 0,
+          "passes": 0,
+          "fails": 15001
+        }
+      },
+      "successful_drain": true
+    },
+    "ready_to_claim": {
+      "offered_requests_per_second": 300,
+      "duration_seconds": 40,
+      "histogram_scope": "phase-only delta after preceding work drains",
+      "metrics": {
+        "symba_ready_to_claim_p95_ms": {
+          "avg": 25,
+          "min": 25,
+          "med": 25,
+          "max": 25,
+          "p(90)": 25,
+          "p(95)": 25,
+          "p(99)": 25
+        },
+        "symba_claim_samples": {
+          "p(95)": 12001,
+          "p(99)": 12001,
+          "avg": 12001,
+          "min": 12001,
+          "med": 12001,
+          "max": 12001,
+          "p(90)": 12001
+        },
+        "iterations": {
+          "count": 12001,
+          "rate": 285.64813496236474
+        },
+        "checks": {
+          "rate": 1,
+          "passes": 12001,
+          "fails": 0
+        }
+      }
+    }
+  },
+  "artifact_sha256": {
+    "ready_to_claim.summary.json": "6c91f1e6b0c6c7c879ee85f83f7b9ea1bdb08aac03549d07ce4d39a7d5d2483b",
+    "submit_throughput.summary.json": "696a87be45d60ac7f09d5b32f9aff08ba591e350e0d8e2cd2dcf1ea677b836cc"
+  },
+  "limits": [
+    "Short, warmed single-run measurement; not a soak test or deployment capacity guarantee.",
+    "500 HTTP submissions/s is not evidence of 500 sustained completions/s with bounded queue latency.",
+    "At 500 submissions/s, accumulated work required drain after the phase. The <150ms claim gate is tested at 300/s.",
+    "Claim p95 is a conservative histogram bucket bound, not an interpolated percentile.",
+    "No thresholds or PostgreSQL durability settings were relaxed."
+  ]
+}

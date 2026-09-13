@@ -9,6 +9,8 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "lint": "eslint .",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test:sse": "node --experimental-strip-types --test tests/sseParser.test.ts",
     "gen:api": "openapi-typescript ./openapi.json -o ./src/api/schema.ts"
   },
   "dependencies": {
