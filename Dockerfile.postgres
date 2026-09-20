@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.4@sha256:9ba7531bd80fb0a858632727cf7a112fbfd19b17e94c4e84ced81e24ef1a0dbc
 
-FROM postgres:18.1@sha256:1090bc3a8ccfb0b55f78a494d76f8d603434f7e4553543d6e807bc7bd6bbd17f
+FROM postgres:18.4@sha256:a02db8cac496f15b094798a38254f14d6e00741f709360e5e00bb6668ea31636
 
 COPY --chmod=0555 scripts/postgres/init_roles.sh /docker-entrypoint-initdb.d/010-symba-roles.sh
 COPY --chmod=0555 scripts/release/verify_provenance.sh /usr/local/bin/symba-verify-release
